@@ -1,0 +1,35 @@
+# ── Corpus & data — NEVER commit ─────────────────────────────────────────
+# data/ holds reconstructed lyrics of copyrighted commercial songs, the SQLite
+# state DB, transcripts and logs. This is personal-use material and must not be
+# published. The repo is CODE ONLY.
+data/
+*.db
+*.jsonl
+
+# Local config (paths, model choices, any tokens)
+config.yaml
+
+# Model adapters / checkpoints (large, regenerable)
+models/
+adapters/
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Logs & scratch
+*.log
+*.out
+scratchpad/
+tmp/

@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""Structural tag format for Punjabi songs and stories.
+
+Why tags: training examples are windows, but a song is a whole. Tags carry song-level
+context (refrain, rhyme, position) into every window, so the model learns architecture
+-- mukhda/antara alternation, rhyme discipline, narrative progression -- rather than
+just local phrasing.
+
+Test:  ~/.venvs/punjabi-lm/bin/python tagfmt.py
+"""
+import re
+import unicodedata
+from pathlib import Path
+
+GURMUKHI = re.compile(r"[਀-੿]")
+
+# Section tags. Punjabi names, because the model already knows these words and they cost
+# fewer tokens than inventing English labels for Punjabi forms.
+MUKHDA = "ਮੁਖੜਾ"    # refrain / hook
+ANTARA = "ਅੰਤਰਾ"    # verse
+SATHAI = "ਸਥਾਈ"     # opening line of a kali
+
+
+def gurmukhi_ratio(text):
+    letters = [c for c in text if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(bool(GURMUKHI.match(c)) for c in letters) / len(letters)
+
+
+def rhyme_key(line, n=3):
+    """Trailing characters of a line — a crude but effective rhyme signature.
+
+    Punjabi folk rhyme is overwhelmingly end-rhyme on the final word, so the last few
+    characters capture it without needing a phonetic dictionary.
+    """
+    w = [w for w in re.sub(r"[^\w\s਀-੿]", "", line).split() if w]
+    return w[-1][-n:] if w else ""
+
+
+def split_stanzas(text):
+    return [s.strip() for s in re.split(r"\n\s*\n", text.strip()) if s.strip()]
+
+
+def detect_mukhda(stanzas):
+    """The most-repeated line across stanzas is the refrain."""
+    counts = {}
+    for st in stanzas:
+        for line in st.splitlines():
+            line = line.strip()
+            if line:
+                counts[line] = counts.get(line, 0) + 1
+    if not counts:
+        return None
+    best, n = max(counts.items(), key=lambda kv: kv[1])
+    return best if n >= 2 else None
+
+
+def detect_bridge(bodies, main_rhyme):
+    """Index of the bridge (ਪੁਲ) stanza, or None.
+
+    A bridge departs from the song: different rhyme, and it appears once, late. So the
+    signal is a stanza whose end-rhyme breaks the dominant scheme, sitting in the back
+    half of the song. Heuristic by nature — the Editor lets you override it.
+    """
+    if len(bodies) < 3 or not main_rhyme:
+        return None
+    odd = [i for i, b in enumerate(bodies)
+           if b and rhyme_key(b[-1]) != main_rhyme]
+    # exactly one departure, and not the opening stanza
+    if len(odd) == 1 and odd[0] >= len(bodies) // 2:
+        return odd[0]
+    return None
+
+
+def build_song(text, title, form="kali", theme="", artist="", style_extra="",
+               intro="", bridge_at=None):
+    """SONG scheme — Suno-standard tags.
+
+    Three content types exist and must not be mixed:
+      song      geet / kali / tappa       verse, sung        -> this function
+      qissa kav Heer, Sassi Punnu         narrative VERSE    -> build_qissa()
+      story     short / long              prose              -> build_story()
+
+    Punjabi folk structure is mukhda (refrain, a.k.a. sthayi) + antara (verse), with the
+    mukhda repeating after each antara. That maps exactly onto Suno's [Chorus]/[Verse N],
+    so we use the standard tags: Gemma has seen them in pretraining, they cost 3-5 tokens,
+    and the output stays pasteable into Suno.
+    """
+    text = unicodedata.normalize("NFC", text)
+    stanzas = split_stanzas(text)
+    mukhda = detect_mukhda(stanzas)
+
+    bodies = []
+    for st in stanzas:
+        verse = [l.strip() for l in st.splitlines()
+                 if l.strip() and l.strip() != mukhda]
+        if verse:
+            bodies.append(verse)
+
+    rhymes = [rhyme_key(b[-1]) for b in bodies if b]
+    rhyme = max(set(rhymes), key=rhymes.count) if rhymes else ""
+
+    style = f"Punjabi folk {form}"
+    if artist:
+        style += f", {artist}"
+    if style_extra:
+        style += f", {style_extra}"
+
+    out = [f"[Style: {style}]"]
+    if title:
+        out.append(f"[Title: {title}]")
+    if theme:
+        out.append(f"[Theme: {theme}]")
+    if rhyme:
+        out.append(f"[Rhyme: {rhyme}]")
+
+    if intro:
+        out += ["[Intro]", intro]
+
+    if bridge_at is None:
+        bridge_at = detect_bridge(bodies, rhyme)
+
+    # mukhda repeats after every antara — that alternation IS the form, so emit it
+    vnum = 0
+    for i, verse in enumerate(bodies):
+        if mukhda:
+            out += ["[Chorus]", mukhda]
+        if i == bridge_at:
+            out.append("[Bridge]")          # ਪੁਲ — departs from the main rhyme
+        else:
+            vnum += 1
+            out.append(f"[Verse {vnum}]")
+        out.extend(verse)
+    if mukhda:
+        out += ["[Outro]", mukhda]
+    return "\n".join(out)
+
+
+def build_qissa(stanzas, title, position=None, total=None,
+                characters="", meter="baint", episode=""):
+    """QISSA KAV scheme — narrative verse (Heer Waris Shah, Sassi Punnu, Mirza Sahiban).
+
+    Not a story: it is metrical, rhymed, sung/recited verse that happens to carry a plot.
+    Tagging it as prose would destroy the meter. Waris Shah's Heer is in *baint* meter.
+
+    Because a qissa runs to thousands of stanzas, a training window is a slice — so the
+    header carries narrative position, letting the model learn arc as well as meter.
+    """
+    out = [f"[Form: qissa kav]", f"[Meter: {meter}]"]
+    if title:
+        out.append(f"[Title: {title}]")
+    if characters:
+        out.append(f"[Characters: {characters}]")
+    if episode:
+        out.append(f"[Episode: {episode}]")
+    if position and total:
+        out.append(f"[Position: {position}/{total}]")
+    for i, st in enumerate(stanzas, 1):
+        out.append(f"[Bait {i}]")
+        out.extend(st if isinstance(st, list) else st.splitlines())
+    return "\n".join(out)
+
+
+def build_story(text, title, kind="short", theme="", characters=""):
+    """STORY scheme — prose. Short or long. Plain narrative, no meter, no rhyme."""
+    text = unicodedata.normalize("NFC", text)
+    out = [f"[Form: {kind} story]"]
+    if title:
+        out.append(f"[Title: {title}]")
+    if theme:
+        out.append(f"[Theme: {theme}]")
+    if characters:
+        out.append(f"[Characters: {characters}]")
+    for i, para in enumerate(split_stanzas(text), 1):
+        out.append(f"[Scene {i}]")
+        out.append(para)
+    return "\n".join(out)
+
+
+def build_compact(text, title, form="kali", theme="", kind="song"):
+    """Compact scheme — same structure, far fewer tokens.
+
+    Measured tag costs in Gemma's tokenizer (the reason this scheme exists):
+      antara / verse -> 1 token      ਅੰਤਰਾ -> 4      ਮੁਖੜਾ -> 5
+      [V2/4]         -> 6 tokens     <ਅੰਤਰਾ n="2" of="4"> -> 13
+    Closing tags are dropped entirely (0 tokens) — a blank line already separates
+    stanzas, so </...> buys nothing but costs 3-6 tokens every section.
+    """
+    text = unicodedata.normalize("NFC", text)
+    stanzas = split_stanzas(text)
+    mukhda = detect_mukhda(stanzas)
+
+    bodies = []
+    for st in stanzas:
+        verse = [l.strip() for l in st.splitlines()
+                 if l.strip() and l.strip() != mukhda]
+        if verse:
+            bodies.append(verse)
+
+    rhymes = [rhyme_key(b[-1]) for b in bodies if b]
+    rhyme = max(set(rhymes), key=rhymes.count) if rhymes else ""
+
+    head = f'<{kind} {form}'
+    if title:
+        head += f' "{title}"'
+    if theme:
+        head += f' theme="{theme}"'
+    if rhyme:
+        head += f' rhyme="{rhyme}"'
+    head += f' n={len(bodies)}>'
+
+    out = [head]
+    if mukhda:
+        out.append(f"[M] {mukhda}")
+    for i, verse in enumerate(bodies, 1):
+        out.append(f"[V{i}/{len(bodies)}]")
+        out.extend(verse)
+    return "\n".join(out)
+
+
+def build(text, title, form="kali", theme="", kind="song"):
+    """Verbose XML-style scheme. Kept for comparison — costs ~42% overhead."""
+    text = unicodedata.normalize("NFC", text)
+    stanzas = split_stanzas(text)
+    mukhda = detect_mukhda(stanzas)
+
+    body_stanzas = []
+    for st in stanzas:
+        lines = [l.strip() for l in st.splitlines() if l.strip()]
+        # Drop the refrain from verse bodies; it lives in the header instead, so every
+        # window sees it without paying for it repeatedly inside the text.
+        verse = [l for l in lines if l != mukhda]
+        if verse:
+            body_stanzas.append(verse)
+
+    rhymes = [rhyme_key(l[-1]) for l in body_stanzas if l]
+    rhyme = max(set(rhymes), key=rhymes.count) if rhymes else ""
+
+    head = [f'<{kind} title="{title}" form="{form}"']
+    if theme:
+        head.append(f'theme="{theme}"')
+    if rhyme:
+        head.append(f'rhyme="{rhyme}"')
+    head.append(f'sections="{len(body_stanzas)}">')
+    out = [" ".join(head)]
+    if mukhda:
+        out.append(f"<{MUKHDA}>{mukhda}</{MUKHDA}>")
+    for i, verse in enumerate(body_stanzas, 1):
+        out.append(f'<{ANTARA} n="{i}" of="{len(body_stanzas)}">')
+        out.extend(verse)
+        out.append(f"</{ANTARA}>")
+    out.append(f"</{kind}>")
+    return "\n".join(out)
+
+
+def main():
+    import os
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    from transformers import AutoTokenizer
+
+    src = Path("/mnt/e/Transcribe/corpus/03. CHAN CHANNI RAAT.txt")
+    raw = src.read_text(encoding="utf-8")
+    kw = dict(title="ਚੰਨ ਚਾਨਣੀ ਰਾਤ", form="kali", theme="ਵਿਆਹ ਮੁਕਲਾਵਾ")
+    compact, verbose = build_compact(raw, **kw), build(raw, **kw)
+
+    print("=" * 60)
+    print("COMPACT SCHEME (recommended)")
+    print("=" * 60)
+    print(compact)
+
+    tok = AutoTokenizer.from_pretrained("google/gemma-4-E2B-it")
+    n = lambda s: len(tok(s).input_ids)
+    n_raw, n_c, n_v = n(raw), n(compact), n(verbose)
+
+    print("\n" + "=" * 60)
+    print("TOKEN COST")
+    print("=" * 60)
+    print(f"{'scheme':10} {'tokens':>7} {'overhead':>10} {'vs raw':>8}")
+    print(f"{'raw':10} {n_raw:7d} {'-':>10} {'-':>8}")
+    print(f"{'compact':10} {n_c:7d} {n_c-n_raw:10d} {100*(n_c-n_raw)/n_raw:7.1f}%")
+    print(f"{'verbose':10} {n_v:7d} {n_v-n_raw:10d} {100*(n_v-n_raw)/n_raw:7.1f}%")
+    print(f"\ngurmukhi ratio : {gurmukhi_ratio(raw):.3f}")
+    print(f"fits seq 1024  : {'YES' if n_c <= 1024 else 'NO'} "
+          f"({1024 - n_c} spare with compact)")
+
+
+if __name__ == "__main__":
+    main()
