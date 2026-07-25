@@ -13,6 +13,7 @@ import dataset
 import infer
 import jobs
 import library
+import pdftext
 import quality
 import state
 import tagfmt
@@ -262,6 +263,30 @@ def do_import(title, text, kind, artist, form, theme):
     return f"imported as item {i} — review it in the Editor", stats_md()
 
 
+def do_pdf(files, model, first, last, existing):
+    """Stream Claude-vision OCR of scanned PDF(s) into the import box. Generator: yields
+    (status, text) as each page comes back so you watch the book fill in."""
+    if not files:
+        yield "drop one or more scanned PDFs first", existing or ""
+        return
+    paths = [f.name if hasattr(f, "name") else f for f in files]
+    model = (model or CFG["claude_model"]).strip()
+    first = max(1, int(first or 1))
+    last = int(last) if last else None
+    logs = []
+
+    def log(m):
+        logs.append(m)
+
+    head = (existing.rstrip() + "\n\n") if existing and existing.strip() else ""
+    last_text = existing or ""
+    for acc in pdftext.pdf_to_text(paths, model, first=first, last=last, log=log):
+        last_text = head + acc
+        yield "OCR… " + (logs[-1] if logs else ""), last_text
+    yield ("OCR done — review/split it, set title+type, then Import. "
+           "Any [REFUSED-copyright] page you type by hand."), last_text
+
+
 # ---------------------------------------------------------------- dataset
 def start_dataset(version, model, t_ins, t_theme, t_cont, eval_frac):
     if not version.strip():
@@ -400,8 +425,13 @@ with gr.Blocks(title="Punjabi LM") as demo:
             e_title = gr.Textbox(label="title")
             e_kind = gr.Dropdown(KINDS, value="song", label="type")
             e_artist = gr.Textbox(label="artist")
-            e_form = gr.Textbox(label="form (kali/geet/tappa)")
+            e_form = gr.Textbox(label="form (kali/geet/tappa/dogana)")
             e_theme = gr.Textbox(label="theme")
+        gr.Markdown(
+            "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
+            "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
+            "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
+            "need no marks.")
         with gr.Accordion("⌨ Punjabi typing helper — type roman, get Gurmukhi", open=True):
             with gr.Row():
                 e_roman = gr.Textbox(label="romanized (e.g. muklawa naroi koonj)",
@@ -456,9 +486,26 @@ with gr.Blocks(title="Punjabi LM") as demo:
             i_artist = gr.Textbox(label="artist / poet")
             i_form = gr.Textbox(label="form")
             i_theme = gr.Textbox(label="theme")
+        with gr.Accordion("Scanned PDF → text (phone-scanned book, Claude-vision OCR)",
+                          open=False):
+            gr.Markdown(
+                "Drop phone-scanned PDF(s). Each page is read by Claude vision (your own "
+                "scan, honest transcription — no jailbreak) and streamed into the box below, "
+                "page by page, separated by `----- file pN -----`. It's a **rough draft**: "
+                "fix it here or in the Editor before Import. A `[REFUSED-copyright]` page is "
+                "left blank for you to type by hand.")
+            with gr.Row():
+                i_pdf = gr.File(file_count="multiple", file_types=[".pdf"],
+                                label="drop scanned PDF(s)")
+                i_pdf_model = gr.Textbox(CFG["claude_model"], label="vision model")
+                i_pdf_first = gr.Number(1, label="first page", precision=0)
+                i_pdf_last = gr.Number(0, label="last page (0 = end)", precision=0)
+            i_pdf_btn = gr.Button("Convert PDF → text")
         i_text = gr.Textbox(label="text", lines=18)
         i_btn = gr.Button("Import", variant="primary")
         i_msg = gr.Textbox(label="", lines=1)
+        i_pdf_btn.click(do_pdf, [i_pdf, i_pdf_model, i_pdf_first, i_pdf_last, i_text],
+                        [i_msg, i_text])
         i_btn.click(do_import, [i_title, i_text, i_kind, i_artist, i_form, i_theme],
                     [i_msg, stats])
 

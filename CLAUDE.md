@@ -57,6 +57,11 @@ terminal** — it mangles conjuncts.
 - `tagfmt.py` — Suno-standard structural tags for the 3 content types.
 - `dataset.py` — reverse-instruction dataset builder; `train_job.py` — QLoRA; `infer.py` — base-vs-
   tuned generation; `translit.py` — roman→Gurmukhi typing helper (Google Input Tools).
+- `pdftext.py` — scanned-PDF → Gurmukhi text for the Text-import tab. Renders pages with PyMuPDF and
+  reads them via **Claude-vision through the `claude` CLI** (no API key). The CLI's Read tool is
+  permission-scoped to its cwd, so pages are rendered to a temp dir and claude is run with
+  `cwd=that dir` + basename — an absolute /tmp path is silently refused and looks like a blank page.
+  Honest framing (own scan); copyright refusals flagged `REFUSED-copyright`, never jailbroken.
 - `overnight.py`/`preflight.py` — standalone runners.
 
 ## Hardware constraints (measured — see STATUS.md, do not re-derive)

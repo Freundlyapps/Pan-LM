@@ -20,6 +20,33 @@ MUKHDA = "ਮੁਖੜਾ"    # refrain / hook
 ANTARA = "ਅੰਤਰਾ"    # verse
 SATHAI = "ਸਥਾਈ"     # opening line of a kali
 
+# Duet (dogana) voice markers. In a dogana two voices trade stanzas — the ਸਵਾਲ-ਜਵਾਬ
+# (question-answer) that defines the form. ASR can't tell who sang, so the human marks a
+# stanza's voice while editing by starting it with one of these; the tagger turns it into
+# Suno's [Verse N: Female] / [Verse N: Male] speaker labels — the tags that render duets
+# correctly in Suno. Both a Gurmukhi word and a short roman letter are accepted.
+VOICE_TOKENS = {
+    "ਕੁੜੀ": "Female", "ਕੁੜੀਆਂ": "Female", "ਕ": "Female", "f": "Female", "female": "Female",
+    "ਮੁੰਡਾ": "Male", "ਮੁੰਡੇ": "Male", "ਮ": "Male", "m": "Male", "male": "Male",
+    "ਦੋਵੇਂ": "Both", "ਦੋਨੋਂ": "Both", "b": "Both", "both": "Both",
+}
+_VOICE_RE = re.compile(r"^\s*([^\s:–\-]+)\s*[:\-–]\s*(.*)$")
+
+
+def strip_voice(line):
+    """If a line begins with a voice marker (ਕੁੜੀ:/ਮੁੰਡਾ:/ਦੋਵੇਂ: or F:/M:/B:), return
+    (voice, rest-of-line). Otherwise (None, line). Roman markers are case-insensitive."""
+    m = _VOICE_RE.match(line)
+    if not m:
+        return None, line
+    tok, rest = m.group(1), m.group(2)
+    voice = VOICE_TOKENS.get(tok) or VOICE_TOKENS.get(tok.lower())
+    return (voice, rest.strip()) if voice else (None, line)
+
+
+def has_voice_markers(text):
+    return any(strip_voice(l)[0] for l in text.splitlines())
+
 
 def gurmukhi_ratio(text):
     letters = [c for c in text if c.isalpha()]
@@ -88,6 +115,13 @@ def build_song(text, title, form="kali", theme="", artist="", style_extra="",
     and the output stays pasteable into Suno.
     """
     text = unicodedata.normalize("NFC", text)
+
+    # A dogana (duet) is voice-attributed — route to the speaker-tagged builder when the
+    # editor marked voices, or when the form itself says duet.
+    if has_voice_markers(text) or form.lower() in ("dogana", "duet", "dohra"):
+        return build_duet(text, title, form=form, theme=theme, artist=artist,
+                          style_extra=style_extra, intro=intro)
+
     stanzas = split_stanzas(text)
     mukhda = detect_mukhda(stanzas)
 
@@ -134,6 +168,93 @@ def build_song(text, title, form="kali", theme="", artist="", style_extra="",
         out.extend(verse)
     if mukhda:
         out += ["[Outro]", mukhda]
+    return "\n".join(out)
+
+
+def _voice_segments(text):
+    """Split a duet into (voice, [lines]) segments, honouring the editor's markers.
+
+    A marker sets the voice for what follows until the next marker or a blank line. A blank
+    line ends a segment (stanza break); the voice persists only within a marked run. Lines
+    before any marker come back as voice=None so they still render as plain verses.
+    """
+    segments, voice, lines = [], None, []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s:
+            if lines:
+                segments.append((voice, lines))
+                lines = []
+            continue
+        v, rest = strip_voice(s)
+        if v:
+            if lines:
+                segments.append((voice, lines))
+                lines = []
+            voice = v
+            if rest:
+                lines.append(rest)
+        else:
+            lines.append(s)
+    if lines:
+        segments.append((voice, lines))
+    return segments
+
+
+def build_duet(text, title, form="dogana", theme="", artist="", style_extra="", intro=""):
+    """DOGANA (duet) scheme — two voices trade stanzas, tagged with Suno speaker labels.
+
+    Emits [Verse N: Female] / [Verse N: Male] (and [Chorus: Both] for a shared refrain) —
+    the exact tags that make Suno render a Punjabi duet with alternating singers. Voice
+    attribution comes from the markers the editor typed (see strip_voice); it cannot be
+    inferred from ASR, so an unmarked stanza is left as a plain [Verse N].
+    """
+    text = unicodedata.normalize("NFC", text)
+    segments = _voice_segments(text)
+
+    # Refrain: the single line repeated across segments — usually sung by both.
+    counts = {}
+    for _, lines in segments:
+        for l in lines:
+            counts[l] = counts.get(l, 0) + 1
+    mukhda = None
+    if counts:
+        best, n = max(counts.items(), key=lambda kv: kv[1])
+        mukhda = best if n >= 2 else None
+
+    rhymes = [rhyme_key(lines[-1]) for _, lines in segments if lines]
+    rhyme = max(set(rhymes), key=rhymes.count) if rhymes else ""
+
+    style = f"Punjabi folk {form} (duet)"
+    if artist:
+        style += f", {artist}"
+    if style_extra:
+        style += f", {style_extra}"
+
+    out = [f"[Style: {style}]"]
+    if title:
+        out.append(f"[Title: {title}]")
+    if theme:
+        out.append(f"[Theme: {theme}]")
+    if rhyme:
+        out.append(f"[Rhyme: {rhyme}]")
+    if intro:
+        out += ["[Intro]", intro]
+
+    vnum = 0
+    for voice, lines in segments:
+        body = [l for l in lines if l != mukhda]
+        is_refrain = mukhda and not body           # this segment is only the refrain
+        if is_refrain:
+            out += [f"[Chorus: {voice}]" if voice and voice != "Both" else "[Chorus: Both]",
+                    mukhda]
+            continue
+        vnum += 1
+        out.append(f"[Verse {vnum}: {voice}]" if voice else f"[Verse {vnum}]")
+        if mukhda and mukhda in lines:             # refrain tucked into a voice's stanza
+            out += body + ["[Chorus: Both]", mukhda]
+        else:
+            out.extend(body)
     return "\n".join(out)
 
 
