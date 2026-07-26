@@ -48,6 +48,45 @@ def has_voice_markers(text):
     return any(strip_voice(l)[0] for l in text.splitlines())
 
 
+# Section overrides. The mukhda/antara heuristic in build_song labels every non-refrain
+# stanza [Verse N] and always repeats the refrain as [Outro] — it has no notion of a
+# distinct closing stanza, a bridge, or an intro. So, exactly like the duet voice markers,
+# the editor can force a stanza's section by starting it with a marker. An explicit [Outro]
+# also suppresses the automatic refrain-outro (the "[Chorus] and [Outro] are identical"
+# case). Gurmukhi or short English, case-insensitive.
+SECTION_TOKENS = {
+    "ਇੰਟਰੋ": "Intro", "intro": "Intro",
+    "ਮੁਖੜਾ": "Chorus", "ਸਥਾਈ": "Chorus", "mukhda": "Chorus", "chorus": "Chorus",
+    "ਅੰਤਰਾ": "Verse", "antara": "Verse", "verse": "Verse",
+    "ਪੁਲ": "Bridge", "bridge": "Bridge",
+    "ਅੰਤ": "Outro", "outro": "Outro", "end": "Outro",
+}
+_SECTION_RE = re.compile(r"^\s*([A-Za-z਀-੿]+)\s*[:：]\s*(.*)$")
+
+
+def strip_section(line):
+    """If a line begins with a section marker (ਅੰਤ:/outro:, ਪੁਲ:/bridge:, ਮੁਖੜਾ:/chorus:,
+    ਅੰਤਰਾ:/verse:, ਇੰਟਰੋ:/intro:), return (Section, rest-of-line). Otherwise (None, line)."""
+    m = _SECTION_RE.match(line)
+    if not m:
+        return None, line
+    tok, rest = m.group(1), m.group(2)
+    sec = SECTION_TOKENS.get(tok) or SECTION_TOKENS.get(tok.lower())
+    return (sec, rest.strip()) if sec else (None, line)
+
+
+def _stanza_section(stanza):
+    """(Section|None, stanza-without-its-marker-line). A leading marker forces the section."""
+    lines = stanza.splitlines()
+    if not lines:
+        return None, stanza
+    sec, first = strip_section(lines[0].strip())
+    if not sec:
+        return None, stanza
+    body = ([first] if first.strip() else []) + lines[1:]
+    return sec, "\n".join(body).strip()
+
+
 def gurmukhi_ratio(text):
     letters = [c for c in text if c.isalpha()]
     if not letters:
@@ -123,16 +162,19 @@ def build_song(text, title, form="kali", theme="", artist="", style_extra="",
                           style_extra=style_extra, intro=intro)
 
     stanzas = split_stanzas(text)
-    mukhda = detect_mukhda(stanzas)
+    # A stanza may carry an editor section override (ਅੰਤ:/outro:, ਪੁਲ:/bridge:, …). The
+    # refrain is detected from the marker-stripped text so a marked stanza still counts.
+    parsed = [_stanza_section(st) for st in stanzas]
+    mukhda = detect_mukhda([txt for _, txt in parsed])
 
-    bodies = []
-    for st in stanzas:
-        verse = [l.strip() for l in st.splitlines()
+    bodies = []            # (section|None, [verse lines])
+    for sec, txt in parsed:
+        verse = [l.strip() for l in txt.splitlines()
                  if l.strip() and l.strip() != mukhda]
-        if verse:
-            bodies.append(verse)
+        if verse or sec:
+            bodies.append((sec, verse))
 
-    rhymes = [rhyme_key(b[-1]) for b in bodies if b]
+    rhymes = [rhyme_key(v[-1]) for _, v in bodies if v]
     rhyme = max(set(rhymes), key=rhymes.count) if rhymes else ""
 
     style = f"Punjabi folk {form}"
@@ -153,20 +195,32 @@ def build_song(text, title, form="kali", theme="", artist="", style_extra="",
         out += ["[Intro]", intro]
 
     if bridge_at is None:
-        bridge_at = detect_bridge(bodies, rhyme)
+        bridge_at = detect_bridge([v for _, v in bodies], rhyme)
 
-    # mukhda repeats after every antara — that alternation IS the form, so emit it
+    # An explicit [Outro] marker means the song ends on that stanza — don't also tack the
+    # refrain on as an outro (that's the "[Chorus] and [Outro] are identical" complaint).
+    explicit_outro = any(sec == "Outro" for sec, _ in bodies)
+
+    # mukhda repeats after every antara — that alternation IS the form, so emit it. A marked
+    # stanza jumps straight to its own section (no preceding [Chorus]).
     vnum = 0
-    for i, verse in enumerate(bodies):
+    for i, (sec, verse) in enumerate(bodies):
+        if sec in ("Intro", "Outro"):
+            out.append(f"[{sec}]")
+            out.extend(verse)
+            continue
+        if sec == "Chorus":
+            out += ["[Chorus]", *(verse or ([mukhda] if mukhda else []))]
+            continue
         if mukhda:
             out += ["[Chorus]", mukhda]
-        if i == bridge_at:
+        if sec == "Bridge" or (sec is None and i == bridge_at):
             out.append("[Bridge]")          # ਪੁਲ — departs from the main rhyme
         else:
             vnum += 1
             out.append(f"[Verse {vnum}]")
         out.extend(verse)
-    if mukhda:
+    if mukhda and not explicit_outro:
         out += ["[Outro]", mukhda]
     return "\n".join(out)
 

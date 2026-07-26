@@ -63,12 +63,133 @@ def tag(item, meta):
                              artist=item["artist"] or "")
 
 
-def examples_for(item, meta, kinds_on):
+# --- Long-story handling ------------------------------------------------------
+# A story longer than the training window (cfg["seq_len"]) would be SILENTLY
+# truncated at train time (train_job.encode uses truncation=True) — the model
+# would only ever see the opening. So the user pastes the whole story as ONE
+# reviewed item and we split it HERE into a continuation chain: the first chunk is
+# produced from the instruction/theme, each later chunk from a "continue this
+# story: <tail>" prompt. Nothing truncates, and the model learns the real
+# narrative flow instead of disconnected fragments. Split points are scene-aligned
+# (build_story's [Scene N] markers), so chunks never cut mid-paragraph.
+TAIL_TOK = 224                        # context a continuation prompt shows of the prior chunk
+_SENT = re.compile(r"(?<=[।!?\.])\s+")
+_SCENE = re.compile(r"(?m)(?=^\[Scene \d+\])")
+
+
+def load_tokenizer(cfg, job=None):
+    """The real tokenizer makes chunk sizing exact. If it can't load (offline / gated),
+    fall back to a char estimate — callers pass the result straight to the helpers below."""
+    try:
+        from transformers import AutoTokenizer
+        return AutoTokenizer.from_pretrained(cfg["base_model"])
+    except Exception as e:                # noqa: BLE001 — any load failure is non-fatal
+        if job:
+            job.log(f"tokenizer unavailable ({type(e).__name__}); using char estimate for chunking")
+        return None
+
+
+def tok_len(tok, text):
+    """Token count via the real tokenizer, else a conservative char over-estimate —
+    over-counting splits sooner, which is the safe direction (never truncate)."""
+    if tok is None:
+        return int(len(text) / 1.6)
+    return len(tok(text, add_special_tokens=False).input_ids)
+
+
+def _pack(units, tok, budget):
+    """Greedily pack text units into chunks, each <= budget tokens (never merge across
+    a unit boundary that would overflow)."""
+    chunks, cur = [], ""
+    for u in units:
+        u = u.strip("\n")
+        if not u:
+            continue
+        cand = f"{cur}\n{u}" if cur else u
+        if cur and tok_len(tok, cand) > budget:
+            chunks.append(cur)
+            cur = u
+        else:
+            cur = cand
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+def split_story(tagged, tok, budget):
+    """Split a tagged story into scene-aligned chunks, each <= budget tokens.
+    Returns [] when the whole story already fits — the caller then keeps the normal
+    single-answer path."""
+    if tok_len(tok, tagged) <= budget:
+        return []
+    segs = _SCENE.split(tagged)
+    header = segs[0] if segs and not segs[0].lstrip().startswith("[Scene") else ""
+    scenes = segs[1:] if header else segs
+    units = []
+    for sc in scenes:
+        if tok_len(tok, sc) <= budget:
+            units.append(sc)
+        else:                             # one scene overflows the window — split by sentence
+            units.extend(_pack(_SENT.split(sc.strip()), tok, budget))
+    chunks = _pack(units, tok, budget)
+    if header.strip() and chunks:         # the [Form/Title/Theme] header rides with chunk 0
+        chunks[0] = f"{header.rstrip()}\n{chunks[0]}"
+    return chunks
+
+
+def _tail(text, tok, cap):
+    """Trailing scene(s) of a chunk, <= cap tokens — the context a continuation prompt shows."""
+    keep = []
+    for line in reversed(text.strip().splitlines()):
+        if keep and tok_len(tok, "\n".join([line, *keep])) > cap:
+            break
+        keep.insert(0, line)
+    return "\n".join(keep)
+
+
+def _story_chain(item, meta, kinds_on, chunks, tok):
+    """Instruction/theme -> first chunk, then a 'continue' example for each later chunk."""
+    title = item["title"] or ""
+    head = chunks[0]
+    out = []
+    if kinds_on.get("instruct", True) and meta and meta.get("instructions"):
+        for ins in meta["instructions"][:3]:
+            out.append({"type": "instruct",
+                        "messages": [{"role": "user", "content": ins},
+                                     {"role": "assistant", "content": head}]})
+    if kinds_on.get("theme", True):
+        theme = (meta or {}).get("theme") or item["theme"] or title
+        if theme:
+            ask = f"Write a Punjabi story about {theme}"
+            if item["artist"]:
+                ask += f", in the style of {item['artist']}"
+            out.append({"type": "theme",
+                        "messages": [{"role": "user", "content": ask},
+                                     {"role": "assistant", "content": head}]})
+    if kinds_on.get("continue", True):
+        for i in range(1, len(chunks)):
+            ctx = _tail(chunks[i - 1], tok, TAIL_TOK)
+            out.append({"type": "continue",
+                        "messages": [{"role": "user",
+                                      "content": "Continue this Punjabi story:\n\n" + ctx},
+                                     {"role": "assistant", "content": chunks[i]}]})
+    return out
+
+
+def examples_for(item, meta, kinds_on, tok=None, seq_len=1024):
     """Build the chat-format examples for one item."""
     tagged = tag(item, meta)
     kind = item["kind"] or "song"
     title = item["title"] or ""
     out = []
+
+    # A story too long for the window is turned into a continuation chain (above),
+    # so it trains whole without truncation. Short stories fall through unchanged.
+    if kind == "story":
+        chunk_budget = max(256, seq_len - 320)      # leave room for template + tail context
+        chunks = split_story(tagged, tok, chunk_budget)
+        if chunks:
+            return _story_chain(item, meta, kinds_on, chunks, tok)
 
     if kinds_on.get("instruct", True) and meta and meta.get("instructions"):
         for ins in meta["instructions"][:3]:
@@ -112,6 +233,8 @@ def build(con, cfg, version, model, kinds_on, eval_frac, job, seed=0):
     out_dir.mkdir(parents=True, exist_ok=True)
     job.log(f"building '{version}' from {len(items)} approved item(s), model={model}")
 
+    seq_len = cfg.get("seq_len", 1024)
+    tok = load_tokenizer(cfg, job)        # sizes long-story chunks to the real window
     rows, skipped = [], 0
     for i, item in enumerate(items, 1):
         if job.stopped:
@@ -124,14 +247,20 @@ def build(con, cfg, version, model, kinds_on, eval_frac, job, seed=0):
             job.log(f"[{i}/{len(items)}] SKIP {item['title']}: {'; '.join(m['reasons'])}")
             continue
         meta = claude_json(text, item["kind"] or "song", model)
-        ex = examples_for(item, meta, kinds_on)
+        ex = examples_for(item, meta, kinds_on, tok=tok, seq_len=seq_len)
         for e in ex:
             e["item_id"] = item["id"]
             e["title"] = item["title"]
         rows.extend(ex)
         job.done += 1
-        job.log(f"[{i}/{len(items)}] {item['title']}: {len(ex)} example(s)"
-                + ("" if meta else "  (metadata failed — theme/continue only)"))
+        is_story = (item["kind"] or "song") == "story"
+        chained = sum(1 for e in ex if e["type"] == "continue") if is_story else 0
+        note = ""
+        if not meta:
+            note = "  (metadata failed — theme/continue only)"
+        elif chained:
+            note = f"  (long story → chained into {chained + 1} parts)"
+        job.log(f"[{i}/{len(items)}] {item['title']}: {len(ex)} example(s)" + note)
 
     if not rows:
         job.log("no examples produced")

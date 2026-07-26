@@ -216,12 +216,17 @@ def save_item(item_id, text, title, kind, artist, form, theme):
     return "saved"
 
 
-def decide(item_id, approve, text="", kind="song", force=False):
+def decide(item_id, approve, text="", kind="song", title=None, force=False):
     """Approving a `reject`-scored item requires the override checkbox.
 
     The corpus is only ~500 songs, so a few bad transcripts measurably damage the model.
     The gate is deliberately hard to click through by accident — but never impossible,
     because the detector is heuristic and you are the judge.
+
+    Approve persists the two fields that actually change training — `type` (which builder
+    runs) and `title` (the model learns to emit it) — so you can Approve without a prior
+    Save. The optional fields (artist/form/theme) still need Save; they're overrides for
+    metadata the Dataset step otherwise auto-generates.
     """
     if not item_id:
         return "no item", stats_md()
@@ -233,8 +238,11 @@ def decide(item_id, approve, text="", kind="song", force=False):
         if m["verdict"] == "reject" and not force:
             return (f"❌ BLOCKED — {'; '.join(m['reasons'])}. "
                     "Fix the text, or tick 'override' if the checker is wrong."), stats_md()
-        state.set_fields(CON, int(item_id), state="approved",
-                         note=f"approved ({m['verdict']}{' FORCED' if force else ''})")
+        fields = {"state": "approved", "kind": kind,
+                  "note": f"approved ({m['verdict']}{' FORCED' if force else ''})"}
+        if title is not None and title.strip():
+            fields["title"] = title.strip()
+        state.set_fields(CON, int(item_id), **fields)
         return f"✅ saved + approved ({m['verdict']})", stats_md()
     state.set_fields(CON, int(item_id), state="rejected")
     return "saved + rejected", stats_md()
@@ -255,12 +263,15 @@ def preview_tags(item_id, text, title, kind, artist, form, theme):
 # ---------------------------------------------------------------- import
 def do_import(title, text, kind, artist, form, theme):
     if not text.strip():
-        return "paste some text first", stats_md()
+        return "paste some text first", stats_md(), None
     if not title.strip():
-        return "give it a title", stats_md()
+        return "give it a title", stats_md(), None
     i = state.add_text_item(CON, title.strip(), text.strip(), kind,
                             artist=artist, form=form, theme=theme)
-    return f"imported as item {i} — review it in the Editor", stats_md()
+    # Return the new id so the click chain can open it straight in the Editor — the queue
+    # holds 100s of items, so "review it in the Editor" only helps if we jump you to it.
+    return (f"imported as item {i} — opened in the Editor tab; review & Approve it there",
+            stats_md(), i)
 
 
 def do_pdf(files, model, first, last, existing):
@@ -431,7 +442,13 @@ with gr.Blocks(title="Punjabi LM") as demo:
             "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
             "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
             "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
-            "need no marks.")
+            "need no marks.\n\n"
+            "**Wrong section tag?** The auto-tagger labels every non-refrain stanza "
+            "`[Verse N]` and repeats the refrain as `[Outro]`. To override, start a stanza "
+            "with `ਅੰਤ:` (outro) · `ਪੁਲ:` (bridge) · `ਇੰਟਰੋ:` (intro) · `ਮੁਖੜਾ:` (chorus) — "
+            "English `outro:` / `bridge:` / `intro:` / `chorus:` work too. A stanza marked "
+            "`ਅੰਤ:` becomes the closing `[Outro]` with its own words, and the duplicate "
+            "refrain-outro is dropped.")
         with gr.Accordion("⌨ Punjabi typing helper — type roman, get Gurmukhi", open=True):
             with gr.Row():
                 e_roman = gr.Textbox(label="romanized (e.g. muklawa naroi koonj)",
@@ -463,8 +480,8 @@ with gr.Blocks(title="Punjabi LM") as demo:
         e_nextbtn.click(lambda *a: go(1, *a), nav_in, nav_out)
         e_save.click(save_item, [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme],
                      e_msg)
-        e_ok.click(lambda i, t, k, f: decide(i, True, t, k, f),
-                   [e_id, e_text, e_kind, e_force], [e_msg, stats])
+        e_ok.click(lambda i, t, k, ti, f: decide(i, True, text=t, kind=k, title=ti, force=f),
+                   [e_id, e_text, e_kind, e_title, e_force], [e_msg, stats])
         e_no.click(lambda i: decide(i, False), e_id, [e_msg, stats])
         e_prev.click(preview_tags,
                      [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme], e_tagged)
@@ -479,7 +496,12 @@ with gr.Blocks(title="Punjabi LM") as demo:
 
     with gr.Tab("Text import"):
         gr.Markdown("Paste songs, qissa or stories. They join the same Editor queue as "
-                    "transcribed audio.")
+                    "transcribed audio.\n\n"
+                    "**Long stories: paste the whole thing as one item — no need to split.** "
+                    "The Dataset builder automatically breaks a story longer than the training "
+                    "window into a *continuation chain* (part 1 from the instruction, each later "
+                    "part from a “continue this story…” prompt), so nothing is truncated and the "
+                    "narrative flow is preserved.")
         with gr.Row():
             i_title = gr.Textbox(label="title")
             i_kind = gr.Dropdown(KINDS, value="story", label="type")
@@ -506,8 +528,11 @@ with gr.Blocks(title="Punjabi LM") as demo:
         i_msg = gr.Textbox(label="", lines=1)
         i_pdf_btn.click(do_pdf, [i_pdf, i_pdf_model, i_pdf_first, i_pdf_last, i_text],
                         [i_msg, i_text])
+        # Import, then load the new item into the Editor above so it's ready to review.
         i_btn.click(do_import, [i_title, i_text, i_kind, i_artist, i_form, i_theme],
-                    [i_msg, stats])
+                    [i_msg, stats, e_id]).then(
+                    lambda i, o: load_with_pos(i, o) if i else (gr.skip(),) * 9,
+                    [e_id, e_only], nav_out)
 
     with gr.Tab("Dataset"):
         gr.Markdown(
