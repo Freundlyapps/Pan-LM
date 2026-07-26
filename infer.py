@@ -67,8 +67,10 @@ def generate(cfg, prompt, adapter=None, temp=0.9, top_p=0.95, max_new=400, log=p
     model = _STATE["model"]
 
     msgs = [{"role": "user", "content": prompt}]
-    inputs = tok.apply_chat_template(msgs, add_generation_prompt=True,
-                                     return_tensors="pt").to("cuda")
+    enc = tok.apply_chat_template(msgs, add_generation_prompt=True, return_tensors="pt")
+    if not isinstance(enc, torch.Tensor):        # transformers 5.x returns a BatchEncoding
+        enc = enc["input_ids"]
+    inputs = enc.to("cuda")
     # For base output, disable any attached adapter for the duration of the call.
     disable = (want_base and hasattr(model, "disable_adapter"))
     with torch.no_grad(), (model.disable_adapter() if disable

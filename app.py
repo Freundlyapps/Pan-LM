@@ -333,14 +333,14 @@ def do_pdf(files, model, first, last, existing):
 
 
 # ---------------------------------------------------------------- dataset
-def start_dataset(version, model, t_ins, t_theme, t_cont, eval_frac):
+def start_dataset(version, model, t_ins, t_theme, t_cont, eval_frac, max_cont):
     if not version.strip():
         return "name the dataset version first"
     kinds_on = {"instruct": t_ins, "theme": t_theme, "continue": t_cont}
     ok, msg = jobs.MANAGER.start(
         "dataset",
         lambda job: dataset.build(CON, CFG, version.strip(), model, kinds_on,
-                                  float(eval_frac), job),
+                                  float(eval_frac), job, max_continue=int(max_cont)),
         needs_gpu=False)          # metadata comes from the claude CLI, not the GPU
     return msg
 
@@ -593,6 +593,11 @@ with gr.Blocks(title="Punjabi LM") as demo:
             d_ins = gr.Checkbox(True, label="instruction → song")
             d_theme = gr.Checkbox(True, label="theme → song")
             d_cont = gr.Checkbox(True, label="opening → continuation")
+            d_maxcont = gr.Number(6, label="max continue / story (0 = all)", precision=0)
+        gr.Markdown("*A long story yields many “continue” fragments. Capping them per story "
+                    "keeps whole-story examples from being drowned out — the fix for the model "
+                    "learning to write fragments instead of full stories. 6 is a good default; "
+                    "0 = uncapped.*")
         with gr.Row():
             d_build = gr.Button("Build dataset", variant="primary")
             d_stop = gr.Button("Stop")
@@ -605,7 +610,8 @@ with gr.Blocks(title="Punjabi LM") as demo:
         d_stats = gr.Markdown()
         d_prev = gr.Markdown()
 
-        d_build.click(start_dataset, [d_ver, d_model, d_ins, d_theme, d_cont, d_eval],
+        d_build.click(start_dataset,
+                      [d_ver, d_model, d_ins, d_theme, d_cont, d_eval, d_maxcont],
                       d_status)
         d_stop.click(lambda: jobs.MANAGER.stop("dataset"), outputs=d_status)
         d_poll.click(poll_dataset, outputs=[d_status, d_log, d_pick])

@@ -158,8 +158,21 @@ def _tail(text, tok, cap):
     return tail
 
 
-def _story_chain(item, meta, kinds_on, chunks, tok):
-    """Instruction/theme -> first chunk, then a 'continue' example for each later chunk."""
+def _continue_indices(n_chunks, max_continue):
+    """Which chunk indices (1..n-1) become 'continue' examples. With max_continue>0 we keep an
+    EVEN spread across the story instead of every chunk — so a long story doesn't flood the set
+    with fragment-continuations that drown the 'prompt -> whole story' signal (the failure the
+    first test surfaced). 0 = keep them all (old behaviour)."""
+    idxs = list(range(1, n_chunks))
+    if max_continue and len(idxs) > max_continue:
+        step = len(idxs) / max_continue
+        idxs = sorted({idxs[min(len(idxs) - 1, int(k * step))] for k in range(max_continue)})
+    return idxs
+
+
+def _story_chain(item, meta, kinds_on, chunks, tok, max_continue=0):
+    """Instruction/theme -> first chunk, then a 'continue' example for (a capped, even sample of)
+    the later chunks."""
     title = item["title"] or ""
     head = chunks[0]
     out = []
@@ -178,7 +191,7 @@ def _story_chain(item, meta, kinds_on, chunks, tok):
                         "messages": [{"role": "user", "content": ask},
                                      {"role": "assistant", "content": head}]})
     if kinds_on.get("continue", True):
-        for i in range(1, len(chunks)):
+        for i in _continue_indices(len(chunks), max_continue):
             ctx = _tail(chunks[i - 1], tok, TAIL_TOK)
             out.append({"type": "continue",
                         "messages": [{"role": "user",
@@ -187,8 +200,9 @@ def _story_chain(item, meta, kinds_on, chunks, tok):
     return out
 
 
-def examples_for(item, meta, kinds_on, tok=None, seq_len=1024):
-    """Build the chat-format examples for one item."""
+def examples_for(item, meta, kinds_on, tok=None, seq_len=1024, max_continue=0):
+    """Build the chat-format examples for one item. max_continue caps the per-story continuation
+    examples (0 = uncapped) so whole-story instruction examples aren't drowned out."""
     tagged = tag(item, meta)
     kind = item["kind"] or "song"
     title = item["title"] or ""
@@ -200,7 +214,7 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024):
         chunk_budget = max(256, seq_len - 320)      # leave room for template + tail context
         chunks = split_story(tagged, tok, chunk_budget)
         if chunks:
-            return _story_chain(item, meta, kinds_on, chunks, tok)
+            return _story_chain(item, meta, kinds_on, chunks, tok, max_continue)
 
     if kinds_on.get("instruct", True) and meta and meta.get("instructions"):
         for ins in meta["instructions"][:3]:
@@ -232,8 +246,11 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024):
     return out
 
 
-def build(con, cfg, version, model, kinds_on, eval_frac, job, seed=0):
-    """Walk approved items, generate metadata, write train/eval JSONL."""
+def build(con, cfg, version, model, kinds_on, eval_frac, job, seed=0, max_continue=6):
+    """Walk approved items, generate metadata, write train/eval JSONL.
+
+    max_continue caps continuation examples per story (0 = uncapped). Default 6 keeps long-form
+    flow examples without letting them swamp the whole-story instruction examples."""
     items = [r for r in state.query(con, "approved")]
     job.total = len(items)
     if not items:
@@ -258,7 +275,8 @@ def build(con, cfg, version, model, kinds_on, eval_frac, job, seed=0):
             job.log(f"[{i}/{len(items)}] SKIP {item['title']}: {'; '.join(m['reasons'])}")
             continue
         meta = claude_json(text, item["kind"] or "song", model)
-        ex = examples_for(item, meta, kinds_on, tok=tok, seq_len=seq_len)
+        ex = examples_for(item, meta, kinds_on, tok=tok, seq_len=seq_len,
+                          max_continue=max_continue)
         for e in ex:
             e["item_id"] = item["id"]
             e["title"] = item["title"]
