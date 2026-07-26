@@ -138,13 +138,24 @@ def split_story(tagged, tok, budget):
 
 
 def _tail(text, tok, cap):
-    """Trailing scene(s) of a chunk, <= cap tokens — the context a continuation prompt shows."""
+    """Trailing scene(s) of a chunk, <= cap tokens — the context a continuation prompt shows.
+
+    This is prompt context only (masked in training), so it is safe to trim: keep whole
+    trailing lines while they fit, and if a single trailing line alone exceeds cap, hard-trim
+    it to the last cap tokens. Without this hard cap one long line blows the prompt past the
+    window and the example's answer gets truncated at train time."""
     keep = []
     for line in reversed(text.strip().splitlines()):
         if keep and tok_len(tok, "\n".join([line, *keep])) > cap:
             break
         keep.insert(0, line)
-    return "\n".join(keep)
+    tail = "\n".join(keep)
+    if tok_len(tok, tail) > cap:                      # single trailing line over cap: keep its end
+        if tok is None:
+            tail = tail[-int(cap * 1.6):].lstrip()
+        else:
+            tail = tok.decode(tok(tail, add_special_tokens=False).input_ids[-cap:]).lstrip()
+    return tail
 
 
 def _story_chain(item, meta, kinds_on, chunks, tok):
