@@ -49,11 +49,16 @@ def _load_adapter(cfg, adapter_dir, log=print):
     return name
 
 
-def generate(cfg, prompt, adapter=None, temp=0.9, top_p=0.95, max_new=400, log=print):
+def generate(cfg, prompt, adapter=None, temp=0.7, top_p=0.9, max_new=400,
+             repetition_penalty=1.15, log=print):
     """One generation. adapter=None or 'base' uses the untuned model.
 
     'base' is served from the SAME loaded model with adapters disabled, whether or not
     any adapter is attached yet — so a base/tuned comparison never reloads the 9.6 GB base.
+
+    Decoding note: a high repetition_penalty (was 1.3) starves the common vocabulary on long
+    generations and pushes the model into rare/garbage tokens (other scripts, brackets) — the
+    'salad' failure. 1.15 + no_repeat_ngram_size stops loops without that collapse.
     """
     import contextlib
     import torch
@@ -77,7 +82,8 @@ def generate(cfg, prompt, adapter=None, temp=0.9, top_p=0.95, max_new=400, log=p
                            else contextlib.nullcontext()):
         out = model.generate(inputs, max_new_tokens=max_new, do_sample=temp > 0,
                              temperature=max(temp, 1e-4), top_p=top_p,
-                             repetition_penalty=1.3, pad_token_id=tok.eos_token_id)
+                             repetition_penalty=repetition_penalty, no_repeat_ngram_size=4,
+                             pad_token_id=tok.eos_token_id)
     return tok.decode(out[0][inputs.shape[1]:], skip_special_tokens=True).strip()
 
 
