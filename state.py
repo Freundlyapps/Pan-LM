@@ -88,6 +88,24 @@ def save_edit(con, item_id, text):
     set_fields(con, item_id, final_text=text, state="edited")
 
 
+def delete_item(con, item_id):
+    """Hard-delete an item and its edit history — for junk (e.g. an empty item approved by
+    accident). An *audio* track re-appears as 'pending' on the next Library scan (the file is
+    untouched); a pasted-text item is gone for good, so it's the real delete for imports."""
+    con.execute("DELETE FROM edits WHERE item_id=?", (item_id,))
+    con.execute("DELETE FROM items WHERE id=?", (item_id,))
+    con.commit()
+
+
+def reset_item(con, item_id):
+    """Send an item back to the start of the pipeline: clear its approval/edit and mark it
+    'pending' again. Right for an audio track that was mis-approved empty — it keeps the track
+    (and its id) and re-enters the transcribe queue instead of being deleted."""
+    con.execute("DELETE FROM edits WHERE item_id=?", (item_id,))
+    set_fields(con, item_id, state="pending", raw_text=None, clean_text=None,
+               final_text=None, note=None)
+
+
 def get(con, item_id):
     return con.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
 

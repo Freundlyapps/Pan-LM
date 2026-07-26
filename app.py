@@ -55,18 +55,21 @@ def needs_review_ids():
            [r["id"] for r in state.query(CON, "edited")]
 
 
-def review_queue(only_unreviewed=True):
-    """Ids to walk through in the Editor. By default only those still needing review."""
-    if only_unreviewed:
+def review_queue(scope="needs review"):
+    """Ids to walk through in the Editor, by queue scope. 'approved'/'rejected' let you page
+    back into already-decided items to fix a mistake; 'all' walks everything."""
+    if scope == "needs review":
         ids = needs_review_ids()
-    else:
+    elif scope in ("approved", "rejected"):
+        ids = [r["id"] for r in state.query(CON, scope)]
+    else:                                      # "all"
         ids = [r["id"] for r in state.query(CON)]
     return sorted(set(ids))
 
 
-def neighbour_id(current, step, only_unreviewed):
+def neighbour_id(current, step, scope):
     """Next/prev id in the review queue relative to `current`."""
-    q = review_queue(only_unreviewed)
+    q = review_queue(scope)
     if not q:
         return current
     if not current or int(current) not in q:
@@ -147,26 +150,26 @@ def load_item(item_id):
             f"**state: {r['state']}** · {note}")
 
 
-def load_with_pos(item_id, only_unreviewed):
+def load_with_pos(item_id, scope):
     """load_item plus a 'position in queue' line and the resolved id (for Prev/Next)."""
     out = load_item(item_id)
-    q = review_queue(only_unreviewed)
+    q = review_queue(scope)
     pos = ""
     if item_id and int(item_id) in q:
-        pos = f"  ·  {q.index(int(item_id)) + 1} / {len(q)} in queue"
+        pos = f"  ·  {q.index(int(item_id)) + 1} / {len(q)} in '{scope}'"
     elif q:
-        pos = f"  ·  {len(q)} in queue"
+        pos = f"  ·  {len(q)} in '{scope}'"
     return (int(item_id) if item_id else None, *out[:7], out[7] + pos)
 
 
-def go(step, current, only_unreviewed, text, title, kind, artist, form, theme):
+def go(step, current, scope, text, title, kind, artist, form, theme):
     """Auto-save the current song, then load the neighbour — so edit → Next never loses work."""
     if current and (text or "").strip():
         state.save_edit(CON, int(current), text)
         state.set_fields(CON, int(current), title=title, kind=kind, artist=artist,
                          form=form, theme=theme)
-    nid = neighbour_id(current, step, only_unreviewed)
-    return load_with_pos(nid, only_unreviewed)
+    nid = neighbour_id(current, step, scope)
+    return load_with_pos(nid, scope)
 
 
 def open_from_table(fstate, folder, kind, evt: gr.SelectData):
@@ -211,9 +214,40 @@ def save_item(item_id, text, title, kind, artist, form, theme):
     if not item_id:
         return "no item"
     i = int(item_id)
+    prev = state.get(CON, i)
+    was_approved = bool(prev) and prev["state"] == "approved"
     state.save_edit(CON, i, text)
     state.set_fields(CON, i, title=title, kind=kind, artist=artist, form=form, theme=theme)
+    if was_approved:
+        return "saved — sent back to review (was approved); Approve again to re-add it"
     return "saved"
+
+
+def delete_current(item_id, scope, confirm):
+    """Remove the loaded item, then move to the next in the current queue. Guarded by a
+    confirm checkbox so a misclick can't wipe good work. An audio track is *reset* to pending
+    (kept for transcription, not lost); a pasted-text item is hard-deleted."""
+    if not item_id:
+        return (*load_with_pos(None, scope), stats_md())
+    i = int(item_id)
+    r = state.get(CON, i)
+    if not r:
+        return (*load_with_pos(None, scope), stats_md())
+    if not confirm:
+        cur = load_with_pos(i, scope)
+        return (cur[0], *cur[1:8], "⚠ tick 'confirm delete' first — then click Delete. "
+                + cur[8], stats_md())
+    is_audio = bool(r["path"])                 # a real track: keep the file, just reset it
+    nxt = neighbour_id(i, 1, scope)
+    if is_audio:
+        state.reset_item(CON, i)
+        verb = f"reset audio item {i} ('{r['title']}') to pending — transcribe it later"
+    else:
+        state.delete_item(CON, i)
+        verb = f"🗑 deleted item {i} ('{r['title']}')"
+    nxt = None if nxt == i else nxt
+    res = load_with_pos(nxt, scope)
+    return (res[0], *res[1:8], f"{verb}. {res[8]}", stats_md())
 
 
 def decide(item_id, approve, text="", kind="song", title=None, force=False):
@@ -421,13 +455,18 @@ with gr.Blocks(title="Punjabi LM") as demo:
 
     with gr.Tab("Editor"):
         gr.Markdown("**The gate.** Nothing reaches a dataset until you approve it here. "
-                    "Raw ASR on the left is your evidence for fixing misheard words.")
+                    "Raw ASR on the left is your evidence for fixing misheard words.\n\n"
+                    "**Fix a mistakenly-approved item:** set **queue → approved**, Prev/Next to "
+                    "it, edit, then **Save** (it drops back to review) and **Approve** again — "
+                    "or **Reject** it. Save always sends an approved item back to the gate, so a "
+                    "correction can never sneak into a dataset unreviewed.")
         with gr.Row():
             e_id = gr.Number(label="item id", precision=0)
             e_load = gr.Button("Load", variant="primary")
             e_prevbtn = gr.Button("← Prev")
             e_nextbtn = gr.Button("Next →")
-            e_only = gr.Checkbox(True, label="only unreviewed")
+            e_scope = gr.Dropdown(["needs review", "approved", "rejected", "all"],
+                                 value="needs review", label="queue")
         e_note = gr.Markdown()
         with gr.Row():
             e_raw = gr.Textbox(label="raw ASR (both views)", lines=20, interactive=False)
@@ -470,12 +509,17 @@ with gr.Blocks(title="Punjabi LM") as demo:
             e_no = gr.Button("Reject")
             e_prev = gr.Button("Preview tags")
             e_force = gr.Checkbox(False, label="override quality block")
+        with gr.Row():
+            e_del = gr.Button("Delete item")
+            e_delok = gr.Checkbox(False, label="confirm delete")
+            gr.Markdown("Delete an empty/junk item. A pasted text item is removed; a real "
+                        "audio track is reset to **pending** (kept for transcription).")
         e_msg = gr.Textbox(label="", lines=1)
         e_tagged = gr.Textbox(label="tagged preview (what training sees)", lines=14)
 
         nav_out = [e_id, e_raw, e_text, e_title, e_kind, e_artist, e_form, e_theme, e_note]
-        nav_in = [e_id, e_only, e_text, e_title, e_kind, e_artist, e_form, e_theme]
-        e_load.click(lambda i, o: load_with_pos(i, o), [e_id, e_only], nav_out)
+        nav_in = [e_id, e_scope, e_text, e_title, e_kind, e_artist, e_form, e_theme]
+        e_load.click(lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
         e_prevbtn.click(lambda *a: go(-1, *a), nav_in, nav_out)
         e_nextbtn.click(lambda *a: go(1, *a), nav_in, nav_out)
         e_save.click(save_item, [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme],
@@ -483,6 +527,7 @@ with gr.Blocks(title="Punjabi LM") as demo:
         e_ok.click(lambda i, t, k, ti, f: decide(i, True, text=t, kind=k, title=ti, force=f),
                    [e_id, e_text, e_kind, e_title, e_force], [e_msg, stats])
         e_no.click(lambda i: decide(i, False), e_id, [e_msg, stats])
+        e_del.click(delete_current, [e_id, e_scope, e_delok], nav_out + [stats])
         e_prev.click(preview_tags,
                      [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme], e_tagged)
         e_conv.click(phon_convert, e_roman, [e_guru, e_alts])
@@ -492,7 +537,7 @@ with gr.Blocks(title="Punjabi LM") as demo:
 
     # Library row click -> load that item straight into the Editor above.
     table.select(open_from_table, [f_state, f_folder, f_kind], e_id).then(
-        lambda i, o: load_with_pos(i, o), [e_id, e_only], nav_out)
+        lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
 
     with gr.Tab("Text import"):
         gr.Markdown("Paste songs, qissa or stories. They join the same Editor queue as "
@@ -532,7 +577,7 @@ with gr.Blocks(title="Punjabi LM") as demo:
         i_btn.click(do_import, [i_title, i_text, i_kind, i_artist, i_form, i_theme],
                     [i_msg, stats, e_id]).then(
                     lambda i, o: load_with_pos(i, o) if i else (gr.skip(),) * 9,
-                    [e_id, e_only], nav_out)
+                    [e_id, e_scope], nav_out)
 
     with gr.Tab("Dataset"):
         gr.Markdown(

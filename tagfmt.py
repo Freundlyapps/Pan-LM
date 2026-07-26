@@ -108,6 +108,45 @@ def split_stanzas(text):
     return [s.strip() for s in re.split(r"\n\s*\n", text.strip()) if s.strip()]
 
 
+# Story scene segmentation. A story's [Scene N] tags come from its paragraph breaks, but a
+# pasted / OCR'd story is often one unbroken block (no blank lines) — which would collapse
+# the whole thing into a single [Scene 1]. So: blank-line paragraphs win when present (the
+# author's real breaks); otherwise we segment the block into evenly sized scenes at sentence
+# boundaries so a flat wall of prose still carries structure. These fallback breaks are
+# size-based, not semantic — inserting a blank line in the Editor always overrides them.
+STORY_LONG_WORDS = 400          # a story past this many words is labelled "long", else "short"
+SCENE_SENTENCES = 6             # sentences per scene when segmenting an unbroken block
+_SENT_END = re.compile(r"[।!?.]\s+")
+
+
+def word_count(text):
+    return len(re.findall(r"\S+", text))
+
+
+def story_scenes(text):
+    """Scene bodies for a story, preserving the original text verbatim (only cutting it).
+    Blank-line paragraphs are used as-is; an unbroken block is split every SCENE_SENTENCES
+    sentences."""
+    text = text.strip()
+    paras = split_stanzas(text)
+    if len(paras) > 1:
+        return paras                        # author supplied real paragraph breaks
+    ends = [m.end() for m in _SENT_END.finditer(text)]
+    if len(ends) < SCENE_SENTENCES:         # too short to bother segmenting
+        return [text]
+    cuts = ends[SCENE_SENTENCES - 1::SCENE_SENTENCES]
+    scenes, start = [], 0
+    for c in cuts:
+        chunk = text[start:c].strip()
+        if chunk:
+            scenes.append(chunk)
+        start = c
+    tail = text[start:].strip()
+    if tail:
+        scenes.append(tail)
+    return scenes
+
+
 def detect_mukhda(stanzas):
     """The most-repeated line across stanzas is the refrain."""
     counts = {}
@@ -337,9 +376,15 @@ def build_qissa(stanzas, title, position=None, total=None,
     return "\n".join(out)
 
 
-def build_story(text, title, kind="short", theme="", characters=""):
-    """STORY scheme — prose. Short or long. Plain narrative, no meter, no rhyme."""
+def build_story(text, title, kind=None, theme="", characters=""):
+    """STORY scheme — prose. Plain narrative, no meter, no rhyme.
+
+    kind=None (the default) auto-labels the story "short" or "long" by length; pass "short"
+    or "long" explicitly to override. Scenes come from paragraph breaks, or from sentence-
+    grouping when the text is one unbroken block (see story_scenes)."""
     text = unicodedata.normalize("NFC", text)
+    if kind is None:
+        kind = "long" if word_count(text) > STORY_LONG_WORDS else "short"
     out = [f"[Form: {kind} story]"]
     if title:
         out.append(f"[Title: {title}]")
@@ -347,7 +392,7 @@ def build_story(text, title, kind="short", theme="", characters=""):
         out.append(f"[Theme: {theme}]")
     if characters:
         out.append(f"[Characters: {characters}]")
-    for i, para in enumerate(split_stanzas(text), 1):
+    for i, para in enumerate(story_scenes(text), 1):
         out.append(f"[Scene {i}]")
         out.append(para)
     return "\n".join(out)
