@@ -56,6 +56,8 @@ def tag(item, meta):
     form = (meta or {}).get("form") or item["form"] or ("kali" if kind == "song" else "")
     if kind == "story":
         return tagfmt.build_story(text, title=title, theme=theme)
+    if kind == "lekh":
+        return tagfmt.build_essay(text, title=title, theme=theme, form=form or "essay")
     if kind == "qissa":
         return tagfmt.build_qissa([s.splitlines() for s in tagfmt.split_stanzas(text)],
                                   title=title, characters=item["artist"] or "")
@@ -74,7 +76,10 @@ def tag(item, meta):
 # (build_story's [Scene N] markers), so chunks never cut mid-paragraph.
 TAIL_TOK = 224                        # context a continuation prompt shows of the prior chunk
 _SENT = re.compile(r"(?<=[।!?\.])\s+")
-_SCENE = re.compile(r"(?m)(?=^\[Scene \d+\])")
+_SCENE = re.compile(r"(?m)(?=^\[(?:Scene|Section) \d+\])")   # story scenes OR essay sections
+
+# Prompt wording per kind — the reverse-instruction asks the user's request in these terms.
+KIND_NOUN = {"story": "story", "lekh": "essay", "qissa": "qissa", "song": "song"}
 
 
 def load_tokenizer(cfg, job=None):
@@ -123,7 +128,9 @@ def split_story(tagged, tok, budget):
     if tok_len(tok, tagged) <= budget:
         return []
     segs = _SCENE.split(tagged)
-    header = segs[0] if segs and not segs[0].lstrip().startswith("[Scene") else ""
+    first = segs[0].lstrip() if segs else ""
+    header = segs[0] if segs and not (first.startswith("[Scene ")
+                                      or first.startswith("[Section ")) else ""
     scenes = segs[1:] if header else segs
     units = []
     for sc in scenes:
@@ -170,9 +177,9 @@ def _continue_indices(n_chunks, max_continue):
     return idxs
 
 
-def _story_chain(item, meta, kinds_on, chunks, tok, max_continue=0):
+def _story_chain(item, meta, kinds_on, chunks, tok, max_continue=0, noun="story"):
     """Instruction/theme -> first chunk, then a 'continue' example for (a capped, even sample of)
-    the later chunks."""
+    the later chunks. `noun` ('story'/'essay') words the synthetic prompts."""
     title = item["title"] or ""
     head = chunks[0]
     out = []
@@ -184,7 +191,7 @@ def _story_chain(item, meta, kinds_on, chunks, tok, max_continue=0):
     if kinds_on.get("theme", True):
         theme = (meta or {}).get("theme") or item["theme"] or title
         if theme:
-            ask = f"Write a Punjabi story about {theme}"
+            ask = f"Write a Punjabi {noun} about {theme}"
             if item["artist"]:
                 ask += f", in the style of {item['artist']}"
             out.append({"type": "theme",
@@ -195,7 +202,7 @@ def _story_chain(item, meta, kinds_on, chunks, tok, max_continue=0):
             ctx = _tail(chunks[i - 1], tok, TAIL_TOK)
             out.append({"type": "continue",
                         "messages": [{"role": "user",
-                                      "content": "Continue this Punjabi story:\n\n" + ctx},
+                                      "content": f"Continue this Punjabi {noun}:\n\n" + ctx},
                                      {"role": "assistant", "content": chunks[i]}]})
     return out
 
@@ -208,13 +215,14 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024, max_continue=0):
     title = item["title"] or ""
     out = []
 
-    # A story too long for the window is turned into a continuation chain (above),
-    # so it trains whole without truncation. Short stories fall through unchanged.
-    if kind == "story":
+    # A long story OR essay is turned into a continuation chain (above), so it trains whole
+    # without truncation. Short ones fall through to the generic path unchanged.
+    if kind in ("story", "lekh"):
         chunk_budget = max(256, seq_len - 320)      # leave room for template + tail context
         chunks = split_story(tagged, tok, chunk_budget)
         if chunks:
-            return _story_chain(item, meta, kinds_on, chunks, tok, max_continue)
+            return _story_chain(item, meta, kinds_on, chunks, tok, max_continue,
+                                noun=KIND_NOUN.get(kind, kind))
 
     if kinds_on.get("instruct", True) and meta and meta.get("instructions"):
         for ins in meta["instructions"][:3]:
@@ -226,7 +234,7 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024, max_continue=0):
         theme = (meta or {}).get("theme") or item["theme"] or title
         if theme:
             artist = item["artist"] or ""
-            ask = f"Write a Punjabi {kind} about {theme}"
+            ask = f"Write a Punjabi {KIND_NOUN.get(kind, kind)} about {theme}"
             if artist:
                 ask += f", in the style of {artist}"
             out.append({"type": "theme",

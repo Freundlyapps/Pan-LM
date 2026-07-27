@@ -398,6 +398,23 @@ def build_story(text, title, kind=None, theme="", characters=""):
     return "\n".join(out)
 
 
+def build_essay(text, title, form="essay", theme=""):
+    """ESSAY scheme (ਲੇਖ) — expository prose: essay / article / blog. Not a story: no plot,
+    characters or scenes; it argues or reflects on a topic. So it is tagged with [Section N]
+    (discursive parts), never [Scene N]. `form` labels the sub-kind (essay/article/blog).
+    Segmentation reuses story_scenes — paragraph breaks, or sentence-grouping for one block."""
+    text = unicodedata.normalize("NFC", text)
+    out = [f"[Form: {form}]"]
+    if title:
+        out.append(f"[Title: {title}]")
+    if theme:
+        out.append(f"[Theme: {theme}]")
+    for i, para in enumerate(story_scenes(text), 1):
+        out.append(f"[Section {i}]")
+        out.append(para)
+    return "\n".join(out)
+
+
 def build_compact(text, title, form="kali", theme="", kind="song"):
     """Compact scheme — same structure, far fewer tokens.
 

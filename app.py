@@ -22,7 +22,7 @@ import train_job
 
 CFG = config.load()
 CON = state.connect(config.data_path(CFG, "state.db"))
-KINDS = ["song", "qissa", "story"]
+KINDS = ["song", "qissa", "story", "lekh"]
 
 
 # ---------------------------------------------------------------- helpers
@@ -290,6 +290,8 @@ def preview_tags(item_id, text, title, kind, artist, form, theme):
                                  theme=theme, artist=artist)
     if kind == "story":
         return tagfmt.build_story(text, title=title, theme=theme)
+    if kind == "lekh":
+        return tagfmt.build_essay(text, title=title, theme=theme, form=form or "essay")
     return tagfmt.build_qissa([s.splitlines() for s in tagfmt.split_stanzas(text)],
                               title=title, characters=artist)
 
