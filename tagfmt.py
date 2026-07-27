@@ -118,6 +118,18 @@ STORY_LONG_WORDS = 400          # a story past this many words is labelled "long
 SCENE_SENTENCES = 6             # sentences per scene when segmenting an unbroken block
 _SENT_END = re.compile(r"[।!?.]\s+")
 
+# A kids' story (ਬਾਲ ਕਹਾਣੀ) is the SAME genre as a literary story (scenes, plot), but a very
+# different register — simple, moral, gentle. So it stays kind='story' but gets its own form
+# label ([Form: children's story]) so the two registers don't blur in training. Detected from
+# the form field ("bal"/"children") OR "ਬਾਲ" in the title (so items already titled ਬਾਲ… are
+# caught without re-editing).
+CHILD_HINTS = ("ਬਾਲ", "bal", "child", "kid")
+
+
+def is_children(form, title):
+    s = f"{form or ''} {title or ''}".lower()
+    return any(h in s for h in CHILD_HINTS)
+
 
 def word_count(text):
     return len(re.findall(r"\S+", text))
@@ -376,15 +388,18 @@ def build_qissa(stanzas, title, position=None, total=None,
     return "\n".join(out)
 
 
-def build_story(text, title, kind=None, theme="", characters=""):
+def build_story(text, title, kind=None, theme="", characters="", form=""):
     """STORY scheme — prose. Plain narrative, no meter, no rhyme.
 
-    kind=None (the default) auto-labels the story "short" or "long" by length; pass "short"
-    or "long" explicitly to override. Scenes come from paragraph breaks, or from sentence-
-    grouping when the text is one unbroken block (see story_scenes)."""
+    kind=None (the default) labels the story: "children's" when a kids/ਬਾਲ marker is present
+    (form field or title), else "short"/"long" by length. Pass kind explicitly to override.
+    Scenes come from paragraph breaks, or sentence-grouping for one block (see story_scenes)."""
     text = unicodedata.normalize("NFC", text)
     if kind is None:
-        kind = "long" if word_count(text) > STORY_LONG_WORDS else "short"
+        if is_children(form, title):
+            kind = "children's"
+        else:
+            kind = "long" if word_count(text) > STORY_LONG_WORDS else "short"
     out = [f"[Form: {kind} story]"]
     if title:
         out.append(f"[Title: {title}]")

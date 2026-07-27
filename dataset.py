@@ -55,7 +55,7 @@ def tag(item, meta):
     theme = (meta or {}).get("theme") or item["theme"] or ""
     form = (meta or {}).get("form") or item["form"] or ("kali" if kind == "song" else "")
     if kind == "story":
-        return tagfmt.build_story(text, title=title, theme=theme)
+        return tagfmt.build_story(text, title=title, theme=theme, form=item["form"] or "")
     if kind == "lekh":
         return tagfmt.build_essay(text, title=title, theme=theme, form=form or "essay")
     if kind == "qissa":
@@ -215,14 +215,18 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024, max_continue=0):
     title = item["title"] or ""
     out = []
 
+    # Prompt noun: kids' stories read as "children's story" so the model can be asked for one.
+    noun = KIND_NOUN.get(kind, kind)
+    if kind == "story" and tagfmt.is_children(item["form"], title):
+        noun = "children's story"
+
     # A long story OR essay is turned into a continuation chain (above), so it trains whole
     # without truncation. Short ones fall through to the generic path unchanged.
     if kind in ("story", "lekh"):
         chunk_budget = max(256, seq_len - 320)      # leave room for template + tail context
         chunks = split_story(tagged, tok, chunk_budget)
         if chunks:
-            return _story_chain(item, meta, kinds_on, chunks, tok, max_continue,
-                                noun=KIND_NOUN.get(kind, kind))
+            return _story_chain(item, meta, kinds_on, chunks, tok, max_continue, noun=noun)
 
     if kinds_on.get("instruct", True) and meta and meta.get("instructions"):
         for ins in meta["instructions"][:3]:
@@ -234,7 +238,7 @@ def examples_for(item, meta, kinds_on, tok=None, seq_len=1024, max_continue=0):
         theme = (meta or {}).get("theme") or item["theme"] or title
         if theme:
             artist = item["artist"] or ""
-            ask = f"Write a Punjabi {KIND_NOUN.get(kind, kind)} about {theme}"
+            ask = f"Write a Punjabi {noun} about {theme}"
             if artist:
                 ask += f", in the style of {artist}"
             out.append({"type": "theme",

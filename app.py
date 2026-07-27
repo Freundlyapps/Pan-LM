@@ -289,7 +289,7 @@ def preview_tags(item_id, text, title, kind, artist, form, theme):
         return tagfmt.build_song(text, title=title, form=form or "kali",
                                  theme=theme, artist=artist)
     if kind == "story":
-        return tagfmt.build_story(text, title=title, theme=theme)
+        return tagfmt.build_story(text, title=title, theme=theme, form=form)
     if kind == "lekh":
         return tagfmt.build_essay(text, title=title, theme=theme, form=form or "essay")
     return tagfmt.build_qissa([s.splitlines() for s in tagfmt.split_stanzas(text)],
