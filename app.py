@@ -395,311 +395,317 @@ with gr.Blocks(title="Punjabi LM") as demo:
     gr.Markdown("# ਪੰਜਾਬੀ LM — training platform")
     stats = gr.Markdown(stats_md())
 
-    with gr.Tab("Library"):
-        gr.Markdown("Scan your source roots, then tag folders by language so Hindi/Urdu "
-                    "material stays out of a Gurmukhi-only model.")
-        with gr.Row():
-            scan_btn = gr.Button("Scan library", variant="primary")
-            f_state = gr.Dropdown(["all"] + state.STATES, value="all", label="state")
-            f_folder = gr.Dropdown(folder_choices(), value="all", label="folder")
-            f_kind = gr.Dropdown(["all"] + KINDS, value="all", label="type")
-            refresh = gr.Button("Refresh")
-        with gr.Row():
-            hint = gr.Dropdown(["punjabi", "hindi", "urdu", "mixed", "unknown"],
-                               value="punjabi", label="language of selected folder")
-            hint_btn = gr.Button("Tag folder")
-        scan_log = gr.Textbox(label="log", lines=3)
-        table = gr.Dataframe(
-            headers=["id", "title", "folder", "type", "state", "preview"],
-            interactive=False, wrap=True, label="items")
-
-        scan_btn.click(do_scan, outputs=[scan_log, stats, f_folder])
-        refresh.click(item_rows, [f_state, f_folder, f_kind], table)
-        hint_btn.click(do_hint, [f_folder, hint], scan_log)
-
-    with gr.Tab("Transcribe"):
-        gr.Markdown(f"Runs `{CFG['transcribe_repo']}/pipeline.sh` in batches. "
-                    "Stop is safe — finished tracks stay finished, and the next run skips them.")
-        with gr.Row():
-            t_folder = gr.Dropdown(folder_choices(), value="all", label="folder")
-            t_limit = gr.Number(CFG["batch_size"], label="batch size", precision=0)
-            t_mode = gr.Radio(["song", "story"], value="song", label="mode")
-            t_model = gr.Textbox(CFG["claude_model"], label="claude model")
-        with gr.Row():
-            t_list = gr.Button("List pending tracks")
-            t_firstn = gr.Button("Tick first N")
-            t_clear = gr.Button("Clear selection")
-        t_pick = gr.Dropdown([], value=[], multiselect=True, label="tracks to transcribe "
-                             "(leave empty to just take the next N)", filterable=True)
-        with gr.Accordion("Upload audio from anywhere", open=False):
-            t_up = gr.File(file_count="multiple", label="drop mp3/wav/m4a/flac here")
-            t_upfolder = gr.Textbox("(uploaded)", label="assign to folder")
-            t_upbtn = gr.Button("Add to library")
-        with gr.Row():
-            t_start = gr.Button("Start batch", variant="primary")
-            t_stop = gr.Button("Stop")
-            t_poll = gr.Button("Refresh log")
-        t_status = gr.Textbox(label="status", value="idle")
-        t_log = gr.Textbox(label="live log", lines=18, max_lines=18)
-
-        t_list.click(list_pending, t_folder, [t_pick, t_status])
-        t_firstn.click(pick_first_n, [t_folder, t_limit], t_pick)
-        t_clear.click(lambda: gr.update(value=[]), outputs=t_pick)
-        t_upbtn.click(do_upload, [t_up, t_upfolder], [t_status, stats, t_pick])
-        t_start.click(start_transcribe, [t_folder, t_limit, t_mode, t_model, t_pick],
-                      t_status)
-        t_stop.click(lambda: jobs.MANAGER.stop("transcribe"), outputs=t_status)
-        t_poll.click(poll_transcribe, outputs=[t_status, t_log, stats])
-        timer = gr.Timer(2.0)
-        timer.tick(poll_transcribe, outputs=[t_status, t_log, stats])
-
-    with gr.Tab("Editor"):
-        gr.Markdown("**The gate.** Nothing reaches a dataset until you approve it here. "
-                    "Raw ASR on the left is your evidence for fixing misheard words.\n\n"
-                    "**Fix a mistakenly-approved item:** set **queue → approved**, Prev/Next to "
-                    "it, edit, then **Save** (it drops back to review) and **Approve** again — "
-                    "or **Reject** it. Save always sends an approved item back to the gate, so a "
-                    "correction can never sneak into a dataset unreviewed.")
-        with gr.Row():
-            e_id = gr.Number(label="item id", precision=0)
-            e_load = gr.Button("Load", variant="primary")
-            e_prevbtn = gr.Button("← Prev")
-            e_nextbtn = gr.Button("Next →")
-            e_scope = gr.Dropdown(["needs review", "approved", "rejected", "all"],
-                                 value="needs review", label="queue")
-        e_note = gr.Markdown()
-        with gr.Row():
-            e_raw = gr.Textbox(label="raw ASR (both views)", lines=20, interactive=False)
-            e_text = gr.Textbox(label="final text — edit freely", lines=20)
-        with gr.Row():
-            e_title = gr.Textbox(label="title")
-            e_kind = gr.Dropdown(KINDS, value="song", label="type")
-            e_artist = gr.Textbox(label="artist")
-            e_form = gr.Textbox(label="form (kali/geet/tappa/dogana)")
-            e_theme = gr.Textbox(label="theme")
-        gr.Markdown(
-            "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
-            "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
-            "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
-            "need no marks.\n\n"
-            "**Wrong section tag?** The auto-tagger labels every non-refrain stanza "
-            "`[Verse N]` and repeats the refrain as `[Outro]`. To override, start a stanza "
-            "with `ਅੰਤ:` (outro) · `ਪੁਲ:` (bridge) · `ਇੰਟਰੋ:` (intro) · `ਮੁਖੜਾ:` (chorus) — "
-            "English `outro:` / `bridge:` / `intro:` / `chorus:` work too. A stanza marked "
-            "`ਅੰਤ:` becomes the closing `[Outro]` with its own words, and the duplicate "
-            "refrain-outro is dropped.")
-        with gr.Accordion("⌨ Punjabi typing helper — type roman, get Gurmukhi", open=True):
+    with gr.Tabs() as main_tabs:
+        with gr.Tab("Library"):
+            gr.Markdown("Scan your source roots, then tag folders by language so Hindi/Urdu "
+                        "material stays out of a Gurmukhi-only model.")
             with gr.Row():
-                e_roman = gr.Textbox(label="romanized (e.g. muklawa naroi koonj)",
-                                     scale=3)
-                e_conv = gr.Button("→ Gurmukhi", scale=1)
-            e_guru = gr.Textbox(label="Gurmukhi result (edit, then append)", scale=3)
-            e_alts = gr.Markdown()
-            e_append = gr.Button("↓ append to final text")
-            gr.Markdown("**Fix a garbled word:** find it, type the replacement above, paste "
-                        "into 'replace with'.")
+                scan_btn = gr.Button("Scan library", variant="primary")
+                f_state = gr.Dropdown(["all"] + state.STATES, value="all", label="state")
+                f_folder = gr.Dropdown(folder_choices(), value="all", label="folder")
+                f_kind = gr.Dropdown(["all"] + KINDS, value="all", label="type")
+                refresh = gr.Button("Refresh")
             with gr.Row():
-                e_find = gr.Textbox(label="find")
-                e_repl = gr.Textbox(label="replace with")
-                e_all = gr.Checkbox(True, label="all")
-                e_dofr = gr.Button("Replace")
-        with gr.Row():
-            e_save = gr.Button("Save")
-            e_ok = gr.Button("Approve", variant="primary")
-            e_no = gr.Button("Reject")
-            e_prev = gr.Button("Preview tags")
-            e_force = gr.Checkbox(False, label="override quality block")
-        with gr.Row():
-            e_del = gr.Button("Delete item")
-            e_delok = gr.Checkbox(False, label="confirm delete")
-            gr.Markdown("Delete an empty/junk item. A pasted text item is removed; a real "
-                        "audio track is reset to **pending** (kept for transcription).")
-        e_msg = gr.Textbox(label="", lines=1)
-        e_tagged = gr.Textbox(label="tagged preview (what training sees)", lines=14)
+                hint = gr.Dropdown(["punjabi", "hindi", "urdu", "mixed", "unknown"],
+                                   value="punjabi", label="language of selected folder")
+                hint_btn = gr.Button("Tag folder")
+            scan_log = gr.Textbox(label="log", lines=3)
+            table = gr.Dataframe(
+                headers=["id", "title", "folder", "type", "state", "preview"],
+                interactive=False, wrap=True, label="items")
 
-        nav_out = [e_id, e_raw, e_text, e_title, e_kind, e_artist, e_form, e_theme, e_note]
-        nav_in = [e_id, e_scope, e_text, e_title, e_kind, e_artist, e_form, e_theme]
-        e_load.click(lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
-        e_prevbtn.click(lambda *a: go(-1, *a), nav_in, nav_out)
-        e_nextbtn.click(lambda *a: go(1, *a), nav_in, nav_out)
-        e_save.click(save_item, [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme],
-                     e_msg)
-        e_ok.click(lambda i, t, k, ti, f: decide(i, True, text=t, kind=k, title=ti, force=f),
-                   [e_id, e_text, e_kind, e_title, e_force], [e_msg, stats])
-        e_no.click(lambda i: decide(i, False), e_id, [e_msg, stats])
-        e_del.click(delete_current, [e_id, e_scope, e_delok], nav_out + [stats])
-        e_prev.click(preview_tags,
-                     [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme], e_tagged)
-        e_conv.click(phon_convert, e_roman, [e_guru, e_alts])
-        e_roman.submit(phon_convert, e_roman, [e_guru, e_alts])
-        e_append.click(append_to_text, [e_text, e_guru], e_text)
-        e_dofr.click(find_replace, [e_text, e_find, e_repl, e_all], [e_text, e_msg])
+            scan_btn.click(do_scan, outputs=[scan_log, stats, f_folder])
+            refresh.click(item_rows, [f_state, f_folder, f_kind], table)
+            hint_btn.click(do_hint, [f_folder, hint], scan_log)
 
-    # Library row click -> load that item straight into the Editor above.
-    table.select(open_from_table, [f_state, f_folder, f_kind], e_id).then(
-        lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
+        with gr.Tab("Transcribe"):
+            gr.Markdown(f"Runs `{CFG['transcribe_repo']}/pipeline.sh` in batches. "
+                        "Stop is safe — finished tracks stay finished, and the next run skips them.")
+            with gr.Row():
+                t_folder = gr.Dropdown(folder_choices(), value="all", label="folder")
+                t_limit = gr.Number(CFG["batch_size"], label="batch size", precision=0)
+                t_mode = gr.Radio(["song", "story"], value="song", label="mode")
+                t_model = gr.Textbox(CFG["claude_model"], label="claude model")
+            with gr.Row():
+                t_list = gr.Button("List pending tracks")
+                t_firstn = gr.Button("Tick first N")
+                t_clear = gr.Button("Clear selection")
+            t_pick = gr.Dropdown([], value=[], multiselect=True, label="tracks to transcribe "
+                                 "(leave empty to just take the next N)", filterable=True)
+            with gr.Accordion("Upload audio from anywhere", open=False):
+                t_up = gr.File(file_count="multiple", label="drop mp3/wav/m4a/flac here")
+                t_upfolder = gr.Textbox("(uploaded)", label="assign to folder")
+                t_upbtn = gr.Button("Add to library")
+            with gr.Row():
+                t_start = gr.Button("Start batch", variant="primary")
+                t_stop = gr.Button("Stop")
+                t_poll = gr.Button("Refresh log")
+            t_status = gr.Textbox(label="status", value="idle")
+            t_log = gr.Textbox(label="live log", lines=18, max_lines=18)
 
-    with gr.Tab("Text import"):
-        gr.Markdown("Paste songs, qissa or stories. They join the same Editor queue as "
-                    "transcribed audio.\n\n"
-                    "**Long stories: paste the whole thing as one item — no need to split.** "
-                    "The Dataset builder automatically breaks a story longer than the training "
-                    "window into a *continuation chain* (part 1 from the instruction, each later "
-                    "part from a “continue this story…” prompt), so nothing is truncated and the "
-                    "narrative flow is preserved.")
-        with gr.Row():
-            i_title = gr.Textbox(label="title")
-            i_kind = gr.Dropdown(KINDS, value="story", label="type")
-            i_artist = gr.Textbox(label="artist / poet")
-            i_form = gr.Textbox(label="form")
-            i_theme = gr.Textbox(label="theme")
-        with gr.Accordion("Scanned PDF → text (phone-scanned book, Claude-vision OCR)",
-                          open=False):
+            t_list.click(list_pending, t_folder, [t_pick, t_status])
+            t_firstn.click(pick_first_n, [t_folder, t_limit], t_pick)
+            t_clear.click(lambda: gr.update(value=[]), outputs=t_pick)
+            t_upbtn.click(do_upload, [t_up, t_upfolder], [t_status, stats, t_pick])
+            t_start.click(start_transcribe, [t_folder, t_limit, t_mode, t_model, t_pick],
+                          t_status)
+            t_stop.click(lambda: jobs.MANAGER.stop("transcribe"), outputs=t_status)
+            t_poll.click(poll_transcribe, outputs=[t_status, t_log, stats])
+            timer = gr.Timer(2.0)
+            timer.tick(poll_transcribe, outputs=[t_status, t_log, stats])
+
+        with gr.Tab("Editor", id="editor"):
+            gr.Markdown("**The gate.** Nothing reaches a dataset until you approve it here. "
+                        "Raw ASR on the left is your evidence for fixing misheard words.\n\n"
+                        "**Fix a mistakenly-approved item:** set **queue → approved**, Prev/Next to "
+                        "it, edit, then **Save** (it drops back to review) and **Approve** again — "
+                        "or **Reject** it. Save always sends an approved item back to the gate, so a "
+                        "correction can never sneak into a dataset unreviewed.")
+            with gr.Row():
+                e_id = gr.Number(label="item id", precision=0)
+                e_load = gr.Button("Load", variant="primary")
+                e_prevbtn = gr.Button("← Prev")
+                e_nextbtn = gr.Button("Next →")
+                e_scope = gr.Dropdown(["needs review", "approved", "rejected", "all"],
+                                     value="needs review", label="queue")
+            e_note = gr.Markdown()
+            with gr.Row():
+                e_raw = gr.Textbox(label="raw ASR (both views)", lines=20, interactive=False)
+                e_text = gr.Textbox(label="final text — edit freely", lines=20)
+            with gr.Row():
+                e_title = gr.Textbox(label="title")
+                e_kind = gr.Dropdown(KINDS, value="song", label="type")
+                e_artist = gr.Textbox(label="artist")
+                e_form = gr.Textbox(label="form (kali/geet/tappa/dogana)")
+                e_theme = gr.Textbox(label="theme")
             gr.Markdown(
-                "Drop phone-scanned PDF(s). Each page is read by Claude vision (your own "
-                "scan, honest transcription — no jailbreak) and streamed into the box below, "
-                "page by page, separated by `----- file pN -----`. It's a **rough draft**: "
-                "fix it here or in the Editor before Import. A `[REFUSED-copyright]` page is "
-                "left blank for you to type by hand.")
+                "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
+                "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
+                "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
+                "need no marks.\n\n"
+                "**Wrong section tag?** The auto-tagger labels every non-refrain stanza "
+                "`[Verse N]` and repeats the refrain as `[Outro]`. To override, start a stanza "
+                "with `ਅੰਤ:` (outro) · `ਪੁਲ:` (bridge) · `ਇੰਟਰੋ:` (intro) · `ਮੁਖੜਾ:` (chorus) — "
+                "English `outro:` / `bridge:` / `intro:` / `chorus:` work too. A stanza marked "
+                "`ਅੰਤ:` becomes the closing `[Outro]` with its own words, and the duplicate "
+                "refrain-outro is dropped.")
+            with gr.Accordion("⌨ Punjabi typing helper — type roman, get Gurmukhi", open=True):
+                with gr.Row():
+                    e_roman = gr.Textbox(label="romanized (e.g. muklawa naroi koonj)",
+                                         scale=3)
+                    e_conv = gr.Button("→ Gurmukhi", scale=1)
+                e_guru = gr.Textbox(label="Gurmukhi result (edit, then append)", scale=3, buttons=["copy"])
+                e_alts = gr.Markdown()
+                e_append = gr.Button("↓ append to final text")
+                gr.Markdown("**Fix a garbled word:** find it, type the replacement above, paste "
+                            "into 'replace with'.")
+                with gr.Row():
+                    e_find = gr.Textbox(label="find")
+                    e_repl = gr.Textbox(label="replace with")
+                    e_all = gr.Checkbox(True, label="all")
+                    e_dofr = gr.Button("Replace")
             with gr.Row():
-                i_pdf = gr.File(file_count="multiple", file_types=[".pdf"],
-                                label="drop scanned PDF(s)")
-                i_pdf_model = gr.Textbox(CFG["claude_model"], label="vision model")
-                i_pdf_first = gr.Number(1, label="first page", precision=0)
-                i_pdf_last = gr.Number(0, label="last page (0 = end)", precision=0)
-            i_pdf_btn = gr.Button("Convert PDF → text")
-        i_text = gr.Textbox(label="text", lines=18)
-        i_btn = gr.Button("Import", variant="primary")
-        i_msg = gr.Textbox(label="", lines=1)
-        i_pdf_btn.click(do_pdf, [i_pdf, i_pdf_model, i_pdf_first, i_pdf_last, i_text],
-                        [i_msg, i_text])
-        # Import, then load the new item into the Editor above so it's ready to review.
-        i_btn.click(do_import, [i_title, i_text, i_kind, i_artist, i_form, i_theme],
-                    [i_msg, stats, e_id]).then(
-                    lambda i, o: load_with_pos(i, o) if i else (gr.skip(),) * 9,
-                    [e_id, e_scope], nav_out)
+                e_save = gr.Button("Save")
+                e_ok = gr.Button("Approve", variant="primary")
+                e_no = gr.Button("Reject")
+                e_prev = gr.Button("Preview tags")
+                e_force = gr.Checkbox(False, label="override quality block")
+            with gr.Row():
+                e_del = gr.Button("Delete item")
+                e_delok = gr.Checkbox(False, label="confirm delete")
+                gr.Markdown("Delete an empty/junk item. A pasted text item is removed; a real "
+                            "audio track is reset to **pending** (kept for transcription).")
+            e_msg = gr.Textbox(label="", lines=1)
+            e_tagged = gr.Textbox(label="tagged preview (what training sees)", lines=14, buttons=["copy"])
 
-    with gr.Tab("Dataset"):
-        gr.Markdown(
-            "Builds training examples from **approved items only**. Reverse-instruction: "
-            "Claude reads each finished song and writes the prompt that would have "
-            "produced it — real Punjabi output, synthetic prompt. Runs on CPU/API, so it "
-            "is safe while transcription holds the GPU.")
-        with gr.Row():
-            d_ver = gr.Textbox("v1", label="version name")
-            d_model = gr.Textbox(CFG["claude_model"], label="metadata model")
-            d_eval = gr.Number(0.1, label="eval fraction", precision=2)
-        with gr.Row():
-            d_ins = gr.Checkbox(True, label="instruction → song")
-            d_theme = gr.Checkbox(True, label="theme → song")
-            d_cont = gr.Checkbox(True, label="opening → continuation")
-            d_maxcont = gr.Number(6, label="max continue / story (0 = all)", precision=0)
-        gr.Markdown("*A long story yields many “continue” fragments. Capping them per story "
-                    "keeps whole-story examples from being drowned out — the fix for the model "
-                    "learning to write fragments instead of full stories. 6 is a good default; "
-                    "0 = uncapped.*")
-        with gr.Row():
-            d_build = gr.Button("Build dataset", variant="primary")
-            d_stop = gr.Button("Stop")
-            d_poll = gr.Button("Refresh")
-        d_status = gr.Textbox(label="status", value="idle")
-        d_log = gr.Textbox(label="log", lines=12, max_lines=12)
-        with gr.Row():
-            d_pick = gr.Dropdown(dataset.list_versions(CFG), label="existing datasets")
-            d_show = gr.Button("Show stats + preview")
-        d_stats = gr.Markdown()
-        d_prev = gr.Markdown()
+            nav_out = [e_id, e_raw, e_text, e_title, e_kind, e_artist, e_form, e_theme, e_note]
+            nav_in = [e_id, e_scope, e_text, e_title, e_kind, e_artist, e_form, e_theme]
+            e_load.click(lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
+            e_prevbtn.click(lambda *a: go(-1, *a), nav_in, nav_out)
+            e_nextbtn.click(lambda *a: go(1, *a), nav_in, nav_out)
+            e_save.click(save_item, [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme],
+                         e_msg)
+            e_ok.click(lambda i, t, k, ti, f: decide(i, True, text=t, kind=k, title=ti, force=f),
+                       [e_id, e_text, e_kind, e_title, e_force], [e_msg, stats])
+            e_no.click(lambda i: decide(i, False), e_id, [e_msg, stats])
+            e_del.click(delete_current, [e_id, e_scope, e_delok], nav_out + [stats])
+            e_prev.click(preview_tags,
+                         [e_id, e_text, e_title, e_kind, e_artist, e_form, e_theme], e_tagged)
+            e_conv.click(phon_convert, e_roman, [e_guru, e_alts])
+            e_roman.submit(phon_convert, e_roman, [e_guru, e_alts])
+            e_append.click(append_to_text, [e_text, e_guru], e_text)
+            e_dofr.click(find_replace, [e_text, e_find, e_repl, e_all], [e_text, e_msg])
 
-        d_build.click(start_dataset,
-                      [d_ver, d_model, d_ins, d_theme, d_cont, d_eval, d_maxcont],
-                      d_status)
-        d_stop.click(lambda: jobs.MANAGER.stop("dataset"), outputs=d_status)
-        d_poll.click(poll_dataset, outputs=[d_status, d_log, d_pick])
-        gr.Timer(3.0).tick(poll_dataset, outputs=[d_status, d_log, d_pick])
-        d_show.click(lambda v: (dataset.stats(CFG, v), dataset.preview(CFG, v)),
-                     d_pick, [d_stats, d_prev])
+        # Library row click -> load that item straight into the Editor above.
+        table.select(open_from_table, [f_state, f_folder, f_kind], e_id).then(
+            lambda i, o: load_with_pos(i, o), [e_id, e_scope], nav_out)
 
-    with gr.Tab("Train"):
-        gr.Markdown(
-            f"QLoRA on **{CFG['base_model']}** — seq {CFG['seq_len']}, r{CFG['lora_r']}, "
-            f"chunked CE {CFG['ce_chunk']}. Measured at **7.29 GB / 2.93 s per step** on "
-            "this card (see `STATUS.md`). Training and transcription cannot share the GPU.")
-        tr_gpu = gr.Markdown(gpu_line())
-        with gr.Row():
-            tr_ds = gr.Dropdown(dataset.list_versions(CFG), label="dataset")
-            tr_ep = gr.Number(3, label="epochs", precision=0)
-            tr_lr = gr.Number(1e-4, label="learning rate")
-            tr_out = gr.Textbox("", label="adapter name (blank = auto)")
-            tr_max = gr.Number(0, label="max steps (0 = all)", precision=0)
-        with gr.Row():
-            tr_start = gr.Button("Start training", variant="primary")
-            tr_stop = gr.Button("Stop")
-            tr_poll = gr.Button("Refresh")
-        tr_status = gr.Textbox(label="status", value="idle")
-        tr_log = gr.Textbox(label="live log", lines=18, max_lines=18)
+        with gr.Tab("Text import"):
+            gr.Markdown("Paste songs, qissa or stories. They join the same Editor queue as "
+                        "transcribed audio.\n\n"
+                        "**Long stories: paste the whole thing as one item — no need to split.** "
+                        "The Dataset builder automatically breaks a story longer than the training "
+                        "window into a *continuation chain* (part 1 from the instruction, each later "
+                        "part from a “continue this story…” prompt), so nothing is truncated and the "
+                        "narrative flow is preserved.")
+            with gr.Row():
+                i_title = gr.Textbox(label="title")
+                i_kind = gr.Dropdown(KINDS, value="story", label="type")
+                i_artist = gr.Textbox(label="artist / poet")
+                i_form = gr.Textbox(label="form")
+                i_theme = gr.Textbox(label="theme")
+            with gr.Accordion("Scanned PDF → text (phone-scanned book, Claude-vision OCR)",
+                              open=False):
+                gr.Markdown(
+                    "Drop phone-scanned PDF(s). Each page is read by Claude vision (your own "
+                    "scan, honest transcription — no jailbreak) and streamed into the box below, "
+                    "page by page, separated by `----- file pN -----`. It's a **rough draft**: "
+                    "fix it here or in the Editor before Import. A `[REFUSED-copyright]` page is "
+                    "left blank for you to type by hand.")
+                with gr.Row():
+                    i_pdf = gr.File(file_count="multiple", file_types=[".pdf"],
+                                    label="drop scanned PDF(s)")
+                    i_pdf_model = gr.Textbox(CFG["claude_model"], label="vision model")
+                    i_pdf_first = gr.Number(1, label="first page", precision=0)
+                    i_pdf_last = gr.Number(0, label="last page (0 = end)", precision=0)
+                i_pdf_btn = gr.Button("Convert PDF → text")
+            i_text = gr.Textbox(label="text", lines=18)
+            with gr.Row():
+                i_btn = gr.Button("Import", variant="primary")
+                i_open = gr.Button("↳ Open in Editor")
+            i_msg = gr.Textbox(label="", lines=1)
+            i_pdf_btn.click(do_pdf, [i_pdf, i_pdf_model, i_pdf_first, i_pdf_last, i_text],
+                            [i_msg, i_text])
+            # Import, then load the new item into the Editor above so it's ready to review.
+            i_btn.click(do_import, [i_title, i_text, i_kind, i_artist, i_form, i_theme],
+                        [i_msg, stats, e_id]).then(
+                        lambda i, o: load_with_pos(i, o) if i else (gr.skip(),) * 9,
+                        [e_id, e_scope], nav_out)
+            # One-click jump: reload the just-imported item and switch to the Editor tab.
+            i_open.click(lambda i, s: load_with_pos(i, s), [e_id, e_scope], nav_out).then(
+                        lambda: gr.Tabs(selected="editor"), None, main_tabs)
 
-        tr_start.click(start_train, [tr_ds, tr_ep, tr_lr, tr_out, tr_max],
-                       [tr_status, tr_gpu])
-        tr_stop.click(lambda: jobs.MANAGER.stop("train"), outputs=tr_status)
-        tr_poll.click(poll_train, outputs=[tr_status, tr_log, tr_gpu])
-        gr.Timer(3.0).tick(poll_train, outputs=[tr_status, tr_log, tr_gpu])
+        with gr.Tab("Dataset"):
+            gr.Markdown(
+                "Builds training examples from **approved items only**. Reverse-instruction: "
+                "Claude reads each finished song and writes the prompt that would have "
+                "produced it — real Punjabi output, synthetic prompt. Runs on CPU/API, so it "
+                "is safe while transcription holds the GPU.")
+            with gr.Row():
+                d_ver = gr.Textbox("v1", label="version name")
+                d_model = gr.Textbox(CFG["claude_model"], label="metadata model")
+                d_eval = gr.Number(0.1, label="eval fraction", precision=2)
+            with gr.Row():
+                d_ins = gr.Checkbox(True, label="instruction → song")
+                d_theme = gr.Checkbox(True, label="theme → song")
+                d_cont = gr.Checkbox(True, label="opening → continuation")
+                d_maxcont = gr.Number(6, label="max continue / story (0 = all)", precision=0)
+            gr.Markdown("*A long story yields many “continue” fragments. Capping them per story "
+                        "keeps whole-story examples from being drowned out — the fix for the model "
+                        "learning to write fragments instead of full stories. 6 is a good default; "
+                        "0 = uncapped.*")
+            with gr.Row():
+                d_build = gr.Button("Build dataset", variant="primary")
+                d_stop = gr.Button("Stop")
+                d_poll = gr.Button("Refresh")
+            d_status = gr.Textbox(label="status", value="idle")
+            d_log = gr.Textbox(label="log", lines=12, max_lines=12)
+            with gr.Row():
+                d_pick = gr.Dropdown(dataset.list_versions(CFG), label="existing datasets")
+                d_show = gr.Button("Show stats + preview")
+            d_stats = gr.Markdown()
+            d_prev = gr.Markdown()
 
-    with gr.Tab("Test"):
-        gr.Markdown(
-            "Base vs. tuned on the same prompt — the only honest way to see if training "
-            "helped. Needs the GPU, so stop transcription/training first.")
-        tst_gpu = gr.Markdown(gpu_line())
-        with gr.Row():
-            tst_adapter = gr.Dropdown(infer.list_adapters(CFG), label="tuned adapter")
-            tst_refresh = gr.Button("↻ adapters")
-        tst_prompt = gr.Textbox(
-            "ਮਾਨਕ ਦੇ ਅੰਦਾਜ਼ ਵਿੱਚ ਵਿਛੋੜੇ ਦੀ ਕਲੀ ਲਿਖੋ",
-            label="prompt", lines=2)
-        with gr.Row():
-            tst_temp = gr.Slider(0.0, 1.5, 0.9, label="temperature")
-            tst_topp = gr.Slider(0.1, 1.0, 0.95, label="top-p")
-            tst_max = gr.Number(400, label="max new tokens", precision=0)
-        tst_go = gr.Button("Generate base vs tuned", variant="primary")
-        with gr.Row():
-            tst_base = gr.Textbox(label="BASE (untuned)", lines=20)
-            tst_tuned = gr.Textbox(label="TUNED", lines=20)
+            d_build.click(start_dataset,
+                          [d_ver, d_model, d_ins, d_theme, d_cont, d_eval, d_maxcont],
+                          d_status)
+            d_stop.click(lambda: jobs.MANAGER.stop("dataset"), outputs=d_status)
+            d_poll.click(poll_dataset, outputs=[d_status, d_log, d_pick])
+            gr.Timer(3.0).tick(poll_dataset, outputs=[d_status, d_log, d_pick])
+            d_show.click(lambda v: (dataset.stats(CFG, v), dataset.preview(CFG, v)),
+                         d_pick, [d_stats, d_prev])
 
-        def run_compare(adapter, prompt, temp, topp, mx):
-            busy = jobs.MANAGER.gpu_busy()
-            if busy:
-                return f"GPU busy with '{busy}'", "", gpu_line()
-            try:
-                b, t = infer.compare(CFG, prompt, adapter or None, temp=temp,
-                                     top_p=topp, max_new=int(mx))
-            except Exception as e:
-                return f"ERROR: {type(e).__name__}: {e}", "", gpu_line()
-            return b, t, gpu_line()
+        with gr.Tab("Train"):
+            gr.Markdown(
+                f"QLoRA on **{CFG['base_model']}** — seq {CFG['seq_len']}, r{CFG['lora_r']}, "
+                f"chunked CE {CFG['ce_chunk']}. Measured at **7.29 GB / 2.93 s per step** on "
+                "this card (see `STATUS.md`). Training and transcription cannot share the GPU.")
+            tr_gpu = gr.Markdown(gpu_line())
+            with gr.Row():
+                tr_ds = gr.Dropdown(dataset.list_versions(CFG), label="dataset")
+                tr_ep = gr.Number(3, label="epochs", precision=0)
+                tr_lr = gr.Number(1e-4, label="learning rate")
+                tr_out = gr.Textbox("", label="adapter name (blank = auto)")
+                tr_max = gr.Number(0, label="max steps (0 = all)", precision=0)
+            with gr.Row():
+                tr_start = gr.Button("Start training", variant="primary")
+                tr_stop = gr.Button("Stop")
+                tr_poll = gr.Button("Refresh")
+            tr_status = gr.Textbox(label="status", value="idle")
+            tr_log = gr.Textbox(label="live log", lines=18, max_lines=18)
 
-        tst_refresh.click(lambda: gr.update(choices=infer.list_adapters(CFG)),
-                          outputs=tst_adapter)
-        tst_go.click(run_compare, [tst_adapter, tst_prompt, tst_temp, tst_topp, tst_max],
-                     [tst_base, tst_tuned, tst_gpu])
+            tr_start.click(start_train, [tr_ds, tr_ep, tr_lr, tr_out, tr_max],
+                           [tr_status, tr_gpu])
+            tr_stop.click(lambda: jobs.MANAGER.stop("train"), outputs=tr_status)
+            tr_poll.click(poll_train, outputs=[tr_status, tr_log, tr_gpu])
+            gr.Timer(3.0).tick(poll_train, outputs=[tr_status, tr_log, tr_gpu])
 
-    with gr.Tab("Settings"):
-        s_roots = gr.Textbox("\n".join(CFG["source_roots"]), label="source roots (one/line)",
-                             lines=3)
-        s_repo = gr.Textbox(CFG["transcribe_repo"], label="Transcribe repo")
-        with gr.Row():
-            s_port = gr.Number(CFG["port"], label="port", precision=0)
-            s_batch = gr.Number(CFG["batch_size"], label="default batch", precision=0)
-            s_cmodel = gr.Textbox(CFG["claude_model"], label="claude model")
-        gr.Markdown("**Training defaults** — measured on an RTX 2070 8GB. "
-                    "See `STATUS.md` before changing.")
-        with gr.Row():
-            s_bmodel = gr.Textbox(CFG["base_model"], label="base model")
-            s_seq = gr.Number(CFG["seq_len"], label="seq len", precision=0)
-            s_r = gr.Number(CFG["lora_r"], label="lora r", precision=0)
-            s_chunk = gr.Number(CFG["ce_chunk"], label="CE chunk", precision=0)
-        s_btn = gr.Button("Save settings", variant="primary")
-        s_msg = gr.Textbox(label="", lines=1)
-        s_btn.click(save_settings,
-                    [s_roots, s_repo, s_port, s_batch, s_cmodel, s_bmodel, s_seq, s_r,
-                     s_chunk], s_msg)
+        with gr.Tab("Test"):
+            gr.Markdown(
+                "Base vs. tuned on the same prompt — the only honest way to see if training "
+                "helped. Needs the GPU, so stop transcription/training first.")
+            tst_gpu = gr.Markdown(gpu_line())
+            with gr.Row():
+                tst_adapter = gr.Dropdown(infer.list_adapters(CFG), label="tuned adapter")
+                tst_refresh = gr.Button("↻ adapters")
+            tst_prompt = gr.Textbox(
+                "ਮਾਨਕ ਦੇ ਅੰਦਾਜ਼ ਵਿੱਚ ਵਿਛੋੜੇ ਦੀ ਕਲੀ ਲਿਖੋ",
+                label="prompt", lines=2)
+            with gr.Row():
+                tst_temp = gr.Slider(0.0, 1.5, 0.9, label="temperature")
+                tst_topp = gr.Slider(0.1, 1.0, 0.95, label="top-p")
+                tst_max = gr.Number(400, label="max new tokens", precision=0)
+            tst_go = gr.Button("Generate base vs tuned", variant="primary")
+            with gr.Row():
+                tst_base = gr.Textbox(label="BASE (untuned)", lines=20)
+                tst_tuned = gr.Textbox(label="TUNED", lines=20)
+
+            def run_compare(adapter, prompt, temp, topp, mx):
+                busy = jobs.MANAGER.gpu_busy()
+                if busy:
+                    return f"GPU busy with '{busy}'", "", gpu_line()
+                try:
+                    b, t = infer.compare(CFG, prompt, adapter or None, temp=temp,
+                                         top_p=topp, max_new=int(mx))
+                except Exception as e:
+                    return f"ERROR: {type(e).__name__}: {e}", "", gpu_line()
+                return b, t, gpu_line()
+
+            tst_refresh.click(lambda: gr.update(choices=infer.list_adapters(CFG)),
+                              outputs=tst_adapter)
+            tst_go.click(run_compare, [tst_adapter, tst_prompt, tst_temp, tst_topp, tst_max],
+                         [tst_base, tst_tuned, tst_gpu])
+
+        with gr.Tab("Settings"):
+            s_roots = gr.Textbox("\n".join(CFG["source_roots"]), label="source roots (one/line)",
+                                 lines=3)
+            s_repo = gr.Textbox(CFG["transcribe_repo"], label="Transcribe repo")
+            with gr.Row():
+                s_port = gr.Number(CFG["port"], label="port", precision=0)
+                s_batch = gr.Number(CFG["batch_size"], label="default batch", precision=0)
+                s_cmodel = gr.Textbox(CFG["claude_model"], label="claude model")
+            gr.Markdown("**Training defaults** — measured on an RTX 2070 8GB. "
+                        "See `STATUS.md` before changing.")
+            with gr.Row():
+                s_bmodel = gr.Textbox(CFG["base_model"], label="base model")
+                s_seq = gr.Number(CFG["seq_len"], label="seq len", precision=0)
+                s_r = gr.Number(CFG["lora_r"], label="lora r", precision=0)
+                s_chunk = gr.Number(CFG["ce_chunk"], label="CE chunk", precision=0)
+            s_btn = gr.Button("Save settings", variant="primary")
+            s_msg = gr.Textbox(label="", lines=1)
+            s_btn.click(save_settings,
+                        [s_roots, s_repo, s_port, s_batch, s_cmodel, s_bmodel, s_seq, s_r,
+                         s_chunk], s_msg)
 
 
 if __name__ == "__main__":
