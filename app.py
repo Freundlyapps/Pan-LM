@@ -457,12 +457,6 @@ with gr.Blocks(title="Punjabi LM") as demo:
             timer.tick(poll_transcribe, outputs=[t_status, t_log, stats])
 
         with gr.Tab("Editor", id="editor"):
-            gr.Markdown("**The gate.** Nothing reaches a dataset until you approve it here. "
-                        "Raw ASR on the left is your evidence for fixing misheard words.\n\n"
-                        "**Fix a mistakenly-approved item:** set **queue → approved**, Prev/Next to "
-                        "it, edit, then **Save** (it drops back to review) and **Approve** again — "
-                        "or **Reject** it. Save always sends an approved item back to the gate, so a "
-                        "correction can never sneak into a dataset unreviewed.")
             with gr.Row():
                 e_id = gr.Number(label="item id", precision=0)
                 e_load = gr.Button("Load", variant="primary")
@@ -480,17 +474,6 @@ with gr.Blocks(title="Punjabi LM") as demo:
                 e_artist = gr.Textbox(label="artist")
                 e_form = gr.Textbox(label="form (kali/geet/tappa/dogana)")
                 e_theme = gr.Textbox(label="theme")
-            gr.Markdown(
-                "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
-                "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
-                "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
-                "need no marks.\n\n"
-                "**Wrong section tag?** The auto-tagger labels every non-refrain stanza "
-                "`[Verse N]` and repeats the refrain as `[Outro]`. To override, start a stanza "
-                "with `ਅੰਤ:` (outro) · `ਪੁਲ:` (bridge) · `ਇੰਟਰੋ:` (intro) · `ਮੁਖੜਾ:` (chorus) — "
-                "English `outro:` / `bridge:` / `intro:` / `chorus:` work too. A stanza marked "
-                "`ਅੰਤ:` becomes the closing `[Outro]` with its own words, and the duplicate "
-                "refrain-outro is dropped.")
             with gr.Accordion("⌨ Punjabi typing helper — type roman, get Gurmukhi", open=True):
                 with gr.Row():
                     e_roman = gr.Textbox(label="romanized (e.g. muklawa naroi koonj)",
@@ -519,6 +502,24 @@ with gr.Blocks(title="Punjabi LM") as demo:
                             "audio track is reset to **pending** (kept for transcription).")
             e_msg = gr.Textbox(label="", lines=1)
             e_tagged = gr.Textbox(label="tagged preview (what training sees)", lines=14, buttons=["copy"])
+            with gr.Accordion("ℹ Editor help — the gate · duet marks · section tags", open=False):
+                gr.Markdown(
+                    "**The gate.** Nothing reaches a dataset until you approve it here. "
+                    "Raw ASR on the left is your evidence for fixing misheard words.\n\n"
+                    "**Fix a mistakenly-approved item:** set **queue → approved**, Prev/Next to "
+                    "it, edit, then **Save** (it drops back to review) and **Approve** again — "
+                    "or **Reject** it. Save always sends an approved item back to the gate, so a "
+                    "correction can never sneak into a dataset unreviewed.\n\n"
+                    "**Duet (dogana)?** Start a stanza with `ਕੁੜੀ:` / `ਮੁੰਡਾ:` / `ਦੋਵੇਂ:` (or "
+                    "`F:` / `M:` / `B:`) to mark who sings it — the tagged preview turns these into "
+                    "Suno's `[Verse 1: Female]` / `[Verse 2: Male]` / `[Chorus: Both]`. Solo songs "
+                    "need no marks.\n\n"
+                    "**Wrong section tag?** The auto-tagger labels every non-refrain stanza "
+                    "`[Verse N]` and repeats the refrain as `[Outro]`. To override, start a stanza "
+                    "with `ਅੰਤ:` (outro) · `ਪੁਲ:` (bridge) · `ਇੰਟਰੋ:` (intro) · `ਮੁਖੜਾ:` (chorus) — "
+                    "English `outro:` / `bridge:` / `intro:` / `chorus:` work too. A stanza marked "
+                    "`ਅੰਤ:` becomes the closing `[Outro]` with its own words, and the duplicate "
+                    "refrain-outro is dropped.")
 
             nav_out = [e_id, e_raw, e_text, e_title, e_kind, e_artist, e_form, e_theme, e_note]
             nav_in = [e_id, e_scope, e_text, e_title, e_kind, e_artist, e_form, e_theme]
